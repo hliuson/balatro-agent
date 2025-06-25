@@ -38,7 +38,6 @@ class State(Enum):
     STANDARD_PACK = 17
     BUFFOON_PACK = 18
     NEW_ROUND = 19,
-    RETURN_TO_MENU = 20,
 
 class Actions(Enum):
     SELECT_BLIND = 1
@@ -64,15 +63,15 @@ class Actions(Enum):
     RETURN_TO_MENU = 21
 
 
-class BalatroEnvBase(gymnasium.Env):
+class BalatroEnvBase:
     def __init__(self, policy_states):
-        super().__init__()
         policy_states = policy_states
         self.port = self.get_available_port()
-        self.bot = BalatroBotBase(deck="Blue Deck", stake=1, seed=None, challenge=None,
+        self.bot = BalatroBotBase(deck="Red Deck", stake=1, seed=None, challenge=None,
                                   bot_port=self.port, verbose=True, exposed_to_policy=policy_states)
         self.bot.start_balatro_instance()
         time.sleep(1)
+        self.bot.connect_socket()
 
     def get_available_port(self):
         with multiprocessing.Pool(processes=1) as pool:
@@ -85,9 +84,7 @@ class BalatroEnvBase(gymnasium.Env):
         
         return self.bot.G      
 
-    def _reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        
+    def _reset(self):
         # Reset the bot
         self.bot.start_run()
         return self.bot.G
@@ -111,6 +108,25 @@ class BalatroEnvBase(gymnasium.Env):
     
     def is_run_finished(self):
         return self.bot.G["waitingFor"] == "return_to_menu"
+    
+    def run_as_cli(self):
+        while True:
+            res = self.bot.run_steps()
+            print(res)
+            print(self.bot.G["waitingFor"])
+            userinput = input("Enter action as JSON with the format: [Action, [params]] or 'exit' to quit: ")
+            if userinput.lower() == 'exit':
+                print("Exiting CLI...")
+                break
+            try:
+                parsed = json.loads(userinput)
+                print(f"Parsed action: {parsed}")
+                self.bot.do_policy_action(parsed)
+            except json.JSONDecodeError as e:
+                print(f"Invalid input format: {e}")
+
+        self.close()
+
 
 class BalatroBotBase:
     def __init__(
@@ -139,8 +155,11 @@ class BalatroBotBase:
 
         self.state = {}
         self.verbose = verbose
-        self.exposed_to_policy = exposed_to_policy + ["return_to_menu"]
+        self.exposed_to_policy = exposed_to_policy
         self.first_run = True
+        self.last_action_no = -1
+        self.last_action_timestamp = time.time()
+        self.last_cmd = "Hello"
 
     def skip_or_select_blind(self, G):
         return [Actions.SELECT_BLIND]
@@ -164,7 +183,7 @@ class BalatroBotBase:
         return [Actions.REARRANGE_CONSUMABLES, []]
 
     def rearrange_hand(self, G):
-        return [Actions.REARRANGE_HAND, []]
+        return [Actions.REARRANGE_HAND, [1,2,4,3,5,6,7,8]]
     
     def select_cards_from_hand(self, G):
         return [Actions.PLAY_HAND, [1]]
@@ -172,8 +191,7 @@ class BalatroBotBase:
 
     def start_balatro_instance(self):
         balatro_exec_path = (
-            #r"C:\Program Files (x86)\Steam\steamapps\common\Balatro\Balatro.exe"
-            r"C:\dev\Balatro\Balatro.exe"
+            r"C:\Program Files (x86)\Steam\steamapps\common\Balatro\Balatro.exe"
         )
         self.balatro_instance = subprocess.Popen(
             [balatro_exec_path, str(self.bot_port)]
@@ -185,7 +203,7 @@ class BalatroBotBase:
         while attempt < max_attempts:
             try:
                 self.connect_socket()
-                self.sendcmd("HELLO")
+                self.ping()
                 data = self.sock.recv(65536)
                 if data:
                     print("Connected to Balatro instance")
@@ -203,12 +221,19 @@ class BalatroBotBase:
         if self.balatro_instance:
             self.balatro_instance.kill()
 
-    def sendcmd(self, cmd, **kwargs):
-        if self.verbose:
-            if cmd != "HELLO":
-                print(f"Sending command: {cmd}")
+    def ping(self):
+        cmd = "HELLO"
         msg = bytes(cmd, "utf-8")
         self.sock.sendto(msg, self.addr)
+
+    def sendcmd(self, cmd, **kwargs):
+        if self.verbose:
+            print(f"Sending command: {cmd}")
+        msg = bytes(cmd, "utf-8")
+        self.sock.sendto(msg, self.addr)
+        self.last_action_no += 1
+        self.last_action_timestamp = time.time()
+        self.last_action = cmd
 
     def actionToCmd(self, action):
         result = []
@@ -279,12 +304,14 @@ class BalatroBotBase:
                 return self.rearrange_consumables(self.G)
             case "rearrange_hand":
                 return self.rearrange_hand(self.G)
+            case "return_to_menu":
+                return [Actions.RETURN_TO_MENU]
         raise ValueError(f"State {self.G['waitingFor']} not implemented in chooseaction or escalated to policy")
             
 
     def run_step(self):
         if self.running:
-            self.sendcmd("HELLO")
+            self.ping()
             jsondata = {}
             try:
                 data = self.sock.recv(65536)
@@ -309,7 +336,16 @@ class BalatroBotBase:
 
                             cmdstr = self.actionToCmd(action)
                             self.sendcmd(cmdstr)
+                            print(f"Action sent: {cmdstr}")
                     else:
+                        #if time.time() - self.last_action_timestamp > 1:
+                        #    #reissue the last action if no response in 2 seconds
+                        #    self.last_action_no -= 1
+                        #    cmdstr = self.last_action
+                        #    self.sendcmd(cmdstr)
+
+                        # sleep for a bit to avoid busy waiting
+                        time.sleep(0.1)
                         if self.verbose:
                             pass
             except socket.error as e:
@@ -361,11 +397,11 @@ class BalatroBotBase:
             self.do_policy_action(action)
 
     def run_steps(self):
-        self.connect_socket()
         self.running = True
         while self.running:
             self.run_step()
 
 if __name__ == "__main__":
-    env = BalatroEnvBase(policy_states=["select_cards_from_hand"])
+    env = BalatroEnvBase(policy_states=[])
     print(env._reset())
+    env.run_as_cli()
