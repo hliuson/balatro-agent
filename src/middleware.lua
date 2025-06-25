@@ -515,7 +515,13 @@ function Middleware.c_start_run()
                 end                    
             end
             G.FUNCS.start_run(nil, {stake = _stake, seed = _seed, challenge = _challenge})
-        end, 1.0)
+        end, 0.1)
+    end)
+end
+
+function Middleware.c_return_to_menu()
+    queueaction(function()
+        G.FUNCS.go_to_menu()
     end)
 end
 
@@ -526,7 +532,7 @@ local function w_gamestate(...)
     -- If we lose a run, we want to go back to the main menu
     -- Before we try to start a new run
     if _k == 'STATE' and _v == G.STATES.GAME_OVER then
-        G.FUNCS.go_to_menu({})
+        Middleware.c_return_to_menu()
     end
 
     if _k == 'STATE' and _v == G.STATES.MENU then
@@ -591,6 +597,11 @@ local function c_initgamehooks()
         G and G.pack_cards and G.pack_cards.cards then
             Middleware.c_choose_booster_cards()
         end
+    end)
+
+    --when in menu, start a new run
+    G.FUNCS.go_to_menu = Hook.addcallback(G.FUNCS.go_to_menu, function(...)
+        Middleware.c_start_run()
     end)
 end
 

@@ -98,6 +98,7 @@ function Botlogger.init()
     Botlogger.q_rearrange_consumables = List.new()
     Botlogger.q_rearrange_hand = List.new()
     Botlogger.q_start_run = List.new()
+    Botlogger.q_return_to_menu = List.new()
     
     -- Hook bot functions
     if Bot.SETTINGS.replay == true or Bot.SETTINGS.api == true then

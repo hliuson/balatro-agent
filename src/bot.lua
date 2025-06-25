@@ -22,6 +22,7 @@ Bot.ACTIONS = {
     REARRANGE_HAND = 17,
     PASS = 18,
     START_RUN = 19,
+    RETURN_TO_MENU = 20,
 }
 
 Bot.ACTIONPARAMS = { }
@@ -263,6 +264,13 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.START_RUN] = {
         return false
     end,
 }
+Bot.ACTIONPARAMS[Bot.ACTIONS.RETURN_TO_MENU] = { -- always valid
+    num_args = 1,
+    func = "return_to_menu",
+    isvalid = function(action)
+        return true
+    end,
+}
 
 -- CHANGE ME
 Bot.SETTINGS = {
@@ -405,6 +413,10 @@ end
 function Bot.start_run()
     return Bot.ACTIONS.START_RUN, { Bot.SETTINGS.stake }, { Bot.SETTINGS.deck }, { Bot.SETTINGS.seed }, { Bot.SETTINGS.challenge }
 end
+
+-- function Bot.return_to_menu()
+--     return Bot.ACTIONS.RETURN_TO_MENU
+-- end
 
 
 return Bot

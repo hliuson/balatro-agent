@@ -58,7 +58,7 @@ function BalatrobotAPI.update(dt)
             if _err == Utils.ERROR.NUMPARAMS then
                 BalatrobotAPI.respond("Error: Incorrect number of params for action " .. _action[1])
             elseif _err == Utils.ERROR.MSGFORMAT then
-                BalatrobotAPI.respond("Error: Incorrect message format. Should be ACTION|arg1|arg2")
+                BalatrobotAPI.respond("Error: Incorrect message format: " .. data .. "; Should be ACTION|arg1|arg2")
             elseif _err == Utils.ERROR.INVALIDACTION then
                 BalatrobotAPI.respond("Error: Action invalid for action " .. _action[1])
             else
@@ -170,6 +170,10 @@ function BalatrobotAPI.init()
         end)
         Middleware.c_start_run = Hook.addbreakpoint(Middleware.c_start_run, function()
             BalatrobotAPI.waitingFor = 'start_run'
+            BalatrobotAPI.waitingForAction = true
+        end)
+        Middleware.c_return_to_menu = Hook.addbreakpoint(Middleware.c_return_to_menu, function()
+            BalatrobotAPI.waitingFor = 'return_to_menu'
             BalatrobotAPI.waitingForAction = true
         end)
     end

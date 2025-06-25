@@ -62,9 +62,6 @@ class FlushBot(Bot):
         return [Actions.PLAY_HAND, [1]]
 
     def select_shop_action(self, G):
-        global t
-        t += 1
-
         return [Actions.END_SHOP]
 
     def select_booster_action(self, G):
@@ -87,6 +84,9 @@ class FlushBot(Bot):
 
     def rearrange_hand(self, G):
         return [Actions.REARRANGE_HAND, []]
+    
+    def select_cards_from_hand(self, G):
+        return self.play_flushes(G)
 
 
 def benchmark_multi_instance():
@@ -96,7 +96,7 @@ def benchmark_multi_instance():
     first_time = None
 
     # Benchmark the game states per second for different bot counts
-    bot_counts = range(1, 21, 3)
+    bot_counts = [1]
     for bot_count in bot_counts:
         target_t = 50 * bot_count
         t = 0

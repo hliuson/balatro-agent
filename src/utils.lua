@@ -1,4 +1,3 @@
-
 Utils = { }
 
 function Utils.getCardData(card)
@@ -122,6 +121,7 @@ function Utils.getRoundData()
 
     if G and G.GAME and G.GAME.current_round then
         _current_round.discards_left = G.GAME.current_round.discards_left
+        _current_round.hands_left = G.GAME.current_round.hands_left
     end
 
     return _current_round
@@ -148,22 +148,31 @@ function Utils.getGameData()
 end
 
 function Utils.getGamestate()
-    -- TODO
-    local _gamestate = { }
+    local _gamestate = {}
 
-    _gamestate = Utils.getGameData()
+    _gamestate.state = G.STATE
+    _gamestate.waiting_for = G.waitingFor
     
-    _gamestate.deckback = Utils.getBackData()
-    _gamestate.deck = Utils.getDeckData() -- Ensure this is not ordered
+    -- Create a simplified version of G.GAME
+    -- keys: 'tarot_rate', 'challenge_tab', 'pack_size', 'round_bonus', 'tag_tally', 'win_ante', 'inflation', 'spectral_rate', 'banned_keys', 'joker_rate', 'used_vouchers', 'modifiers', 'pseudorandom', 'selected_back_key', 'shop', 'STOP_USE', 'round_resets', 'unused_discards', 'disabled_suits', 'ecto_minus', 'selected_back', 'playing_card_rate', 'voucher_text', 'starting_params', 'round_scores', 'edition_rate', 'used_jokers', 'previous_round', 'blind', 'current_round', 'rental_rate', 'consumeable_usage', 'last_blind', 'planet_rate', 'stake', 'perscribed_bosses', 'interest_cap', 'perishable_rounds', 'skips', 'subhash', 'facing_blind', 'orbital_choices', 'interest_amount', 'chips_text', 'blind_on_deck', 'hands_played', 'disabled_ranks', 'round', 'hand_usage', 'consumeable_buffer', 'max_jokers', 'tags', 'base_reroll_cost', 'sort', 'discount_percent', 'pool_flags', 'bankrupt_at', 'joker_usage', 'cards_played', 'chips', 'dollars', 'current_boss_streak', 'won', 'hands', 'probabilities', 'starting_deck_size', 'bosses_used', 'joker_buffer', 'seeded'
+    if G.GAME then
+        _gamestate.game = {
+            hands_played = G.GAME.hands_played,
+            Skips = G.GAME.Skips,
+            round = G.GAME.round,
+            dollars = G.GAME.dollars,
+            max_jokers = G.GAME.max_jokers,
+            bankrupt_at = G.GAME.bankrupt_at,
+            chips = G.GAME.chips,
+        }
+    end
+
+    -- Use existing utility functions to get data
     _gamestate.hand = Utils.getHandData()
     _gamestate.jokers = Utils.getJokersData()
     _gamestate.consumables = Utils.getConsumablesData()
-    _gamestate.ante = Utils.getAnteData()
-    _gamestate.shop = Utils.getShopData() -- Empty if not in shop phase
-    _gamestate.handscores = Utils.getHandScoreData()
-    _gamestate.tags = Utils.getTagsData()
-    _gamestate.current_round = Utils.getRoundData()
-
+    _gamestate.shop = Utils.getShopData()
+    _gamestate.round = G.GAME.current_round
     return _gamestate
 end
 
