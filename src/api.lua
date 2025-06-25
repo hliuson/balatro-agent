@@ -8,17 +8,17 @@ BalatrobotAPI.socket = nil
 
 BalatrobotAPI.waitingFor = nil
 BalatrobotAPI.waitingForAction = true
+BalatrobotAPI.action_no = 0
 
 function BalatrobotAPI.notifyapiclient()
     -- TODO Generate gamestate json object
     local _gamestate = Utils.getGamestate()
     _gamestate.waitingFor = BalatrobotAPI.waitingFor
-    sendDebugMessage('WaitingFor '..tostring(BalatrobotAPI.waitingFor))
     _gamestate.waitingForAction = BalatrobotAPI.waitingFor ~= nil and BalatrobotAPI.waitingForAction or false
+    _gamestate.action_no = BalatrobotAPI.action_no
     local _gamestateJsonString = json.encode(_gamestate)
 
     if BalatrobotAPI.socket and port_or_nil ~= nil then
-        sendDebugMessage(_gamestate.waitingFor)
         BalatrobotAPI.socket:sendto(string.format("%s", _gamestateJsonString), msg_or_ip, port_or_nil)
     end
 end
@@ -34,6 +34,7 @@ function BalatrobotAPI.respond(str)
 end
 
 function BalatrobotAPI.queueaction(action)
+    sendDebugMessage('Queuing Action: ' .. action[1])
     local _params = Bot.ACTIONPARAMS[action[1]]
     List.pushleft(Botlogger['q_'.._params.func], { 0, action })
 end
@@ -51,6 +52,9 @@ function BalatrobotAPI.update(dt)
 	if data then
         if data == 'HELLO\n' or data == 'HELLO' then
             BalatrobotAPI.notifyapiclient()
+            if BalatrobotAPI.waitingForAction then
+                sendDebugMessage("Waiting for action: " .. BalatrobotAPI.waitingFor)
+            end
         else
             local _action = Utils.parseaction(data)
             local _err = Utils.validateAction(_action)
@@ -63,7 +67,9 @@ function BalatrobotAPI.update(dt)
                 BalatrobotAPI.respond("Error: Action invalid for action " .. _action[1])
             else
                 BalatrobotAPI.waitingForAction = false
+                BalatrobotAPI.waitingFor = nil
                 BalatrobotAPI.queueaction(_action)
+                BalatrobotAPI.action_no = BalatrobotAPI.action_no + 1
             end
         end
 
@@ -90,7 +96,7 @@ function BalatrobotAPI.init()
 
     -- Disable FPS cap
     if BALATRO_BOT_CONFIG.uncap_fps then
-        G.FPS_CAP = 999999.0
+        G.FPS_CAP = 1000
     end
 
     -- Makes things move instantly instead of sliding
@@ -111,6 +117,9 @@ function BalatrobotAPI.init()
     if BALATRO_BOT_CONFIG.disable_card_eval_status_text then
         card_eval_status_text = function(card, eval_type, amt, percent, dir, extra) end
     end
+
+    G.SETTINGS.GAMESPEED = 1.0
+    G.SETTINGS.skip_splash = 'Yes'
 
     -- Only draw/present every Nth frame
     local original_draw = love.draw

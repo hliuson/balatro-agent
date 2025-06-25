@@ -2,7 +2,6 @@
 Middleware = { }
 Middleware.choosingboostercards = false
 
-Middleware.queuedactions = List.new()
 Middleware.currentaction = nil
 Middleware.conditionalactions = { }
 
@@ -29,30 +28,6 @@ function random_element(tb)
     return tb[keys[math.random(#keys)]]
 end
 
-function Middleware.add_event_sequence(events)
-
-    local _lastevent = nil
-    local _totaldelay = 0.0
-
-    for k, event in pairs(events) do
-        _totaldelay = _totaldelay + event.delay
-
-        local _event = Event({
-            trigger = 'after',
-            delay = _totaldelay,
-            blocking = false,
-            func = function()
-                event.func(event.args)
-                return true
-            end
-        })
-        G.E_MANAGER:add_event(_event)
-        _lastevent = _event
-    end
-
-    return _lastevent
-end
-
 local function firewhenready(condition, func)
     for i = 1, #Middleware.conditionalactions do
         if Middleware.conditionalactions[i] == nil then
@@ -71,26 +46,29 @@ local function firewhenready(condition, func)
 end
 
 local function queueaction(func, delay)
-
     if not delay then
         delay = Bot.SETTINGS.action_delay
     end
 
-    List.pushleft(Middleware.queuedactions, { func = func, delay = delay })
+    G.E_MANAGER:add_event(Event({
+        trigger = 'after',
+        delay = delay,
+        blocking = true,
+        func = function()
+            func()
+            return true
+        end
+    }))
 end
 
 local function pushbutton(button, delay)
     queueaction(function()
-        if button and button.config and button.config.button then
-            G.FUNCS[button.config.button](button)
-        end
+        G.FUNCS[button.config.button](button)
     end, delay)
 end
 
 local function pushbutton_instant(button, delay)
-    if button and button.config and button.config.button then
-        G.FUNCS[button.config.button](button)
-    end
+    G.FUNCS[button.config.button](button)
 end
 
 local function clickcard(card, delay)
@@ -112,9 +90,9 @@ local function usecard(card, delay)
 
             if card.area and card.area.config.type == 'joker' then
                 local _use_button = card.children.use_button.definition.nodes[1].nodes[1].nodes[1].nodes[1]
-                pushbutton_instant(_use_button, delay)
+                pushbutton(_use_button, delay)
             else
-                pushbutton_instant(_use_button, delay)
+                pushbutton(_use_button, delay)
             end
 
             return
@@ -131,17 +109,6 @@ local function usecard(card, delay)
 end
 
 local function c_update()
-
-    -- Process the queue of Bot events, max 1 per frame
-    _events = { }
-    if not List.isempty(Middleware.queuedactions) and
-        (not Middleware.currentaction or 
-            (Middleware.currentaction and Middleware.currentaction.complete)) then
-
-        local _func_and_delay = List.popright(Middleware.queuedactions)
-        Middleware.currentaction = Middleware.add_event_sequence({{ func = _func_and_delay.func, delay = _func_and_delay.delay }})
-    end
-
     -- Run functions that have been waiting for a condition to be met
     for i = 1, #Middleware.conditionalactions do
         if Middleware.conditionalactions[i] then
@@ -168,7 +135,11 @@ function Middleware.c_play_hand()
     
     function(_action, _cards_to_play)
         for i = 1, #_cards_to_play do
-            clickcard(G.hand.cards[_cards_to_play[i]])
+            sendDebugMessage('Middleware.c_play_hand: Playing card '..tostring(_cards_to_play[i]))
+            local _card = G.hand.cards[_cards_to_play[i]]
+            queueaction(function()
+                _card:click()
+            end)
         end
     
         -- Option 1: Play Hand
@@ -186,10 +157,14 @@ function Middleware.c_play_hand()
 end
 
 function Middleware.c_select_blind()
-
-    local _blind_on_deck = G.GAME.blind_on_deck
-
     firewhenready(function()
+        sendDebugMessage('Checking Middleware.c_select_blind')
+        local _blind_on_deck = G.GAME.blind_on_deck
+        if not _blind_on_deck then
+            _blind_on_deck = G.GAME.blind_on_deck
+            return false
+        end
+        
         if G.GAME.blind_on_deck == 'Small' or G.GAME.blind_on_deck == 'Big' or G.GAME.blind_on_deck == 'Boss' then
             local _action = Bot.skip_or_select_blind(_blind_on_deck)
             if _action then
@@ -202,6 +177,8 @@ function Middleware.c_select_blind()
     end, 
 
     function(_action)
+        sendDebugMessage('Middleware.c_select_blind: _action = '..tostring(_action))
+        local _blind_on_deck = G.GAME.blind_on_deck
         local _blind_obj = G.blind_select_opts[string.lower(_blind_on_deck)]
 
         local _button = nil
@@ -212,8 +189,9 @@ function Middleware.c_select_blind()
             local _skip_button = _blind_obj:get_UIE_by_ID('tag_'.._blind_on_deck).children[2]
             _button = _skip_button
         end
-    
-        pushbutton(_button)
+        
+        pushbutton_instant(_button)
+        sendDebugMessage('Button pressed! _button = '.._button.config.button)
     end)
 end
 
@@ -493,35 +471,52 @@ function Middleware.c_start_run()
     end,
 
     function(_action, _stake, _deck, _seed, _challenge)
-        queueaction(function()
-            local _play_button = G.MAIN_MENU_UI:get_UIE_by_ID('main_menu_play')
-            G.FUNCS[_play_button.config.button]({
-                config = { }
-            })
-            G.FUNCS.exit_overlay_menu()
-        end)
 
-        queueaction(function()
-            for k, v in pairs(G.P_CENTER_POOLS.Back) do
-                if v.name == _deck then
-                    G.GAME.selected_back:change_to(v)
-                    G.GAME.viewed_back:change_to(v)
+        queueaction(
+            G.E_MANAGER:add_event(Event({
+                trigger = 'after',
+                delay = 0.1,
+                blocking = true,
+                func = function()
+                    for k, v in pairs(G.P_CENTER_POOLS.Back) do
+                        if v.name == _deck then
+                            G.GAME.selected_back:change_to(v)
+                            -- G.GAME.viewed_back:change_to(v)
+                        end
+                    end
+        
+                    for i = 1, #G.CHALLENGES do
+                        if G.CHALLENGES[i].name == _challenge then
+                            _challenge = G.CHALLENGES[i]
+                        end                    
+                    end
+                    G.FUNCS.start_run(nil, {stake = _stake, seed = _seed, challenge = _challenge})
+                    sendDebugMessage('Run started.')
                 end
-            end
-
-            for i = 1, #G.CHALLENGES do
-                if G.CHALLENGES[i].name == _challenge then
-                    _challenge = G.CHALLENGES[i]
-                end                    
-            end
-            G.FUNCS.start_run(nil, {stake = _stake, seed = _seed, challenge = _challenge})
-        end, 0.1)
+            })), 0.1)
     end)
 end
 
 function Middleware.c_return_to_menu()
-    queueaction(function()
-        G.FUNCS.go_to_menu()
+    firewhenready(function()
+        local _action = Bot.return_to_menu()
+        if _action then
+            return true, _action
+        else
+            return false
+        end
+    end, function()
+        queueaction(function()
+            G.E_MANAGER:add_event(Event({
+                trigger = 'after',
+                delay = 0.1,
+                blocking = true,
+                func = function()
+                    G.FUNCS.go_to_menu()
+                    return true
+                end
+            }))
+        end)
     end)
 end
 
@@ -531,7 +526,7 @@ local function w_gamestate(...)
 
     -- If we lose a run, we want to go back to the main menu
     -- Before we try to start a new run
-    if _k == 'STATE' and _v == G.STATES.GAME_OVER then
+    if _k == 'STATE' and _v == G.STATES.GAME_OVER and G.STATE_COMPLETE then
         Middleware.c_return_to_menu()
     end
 
@@ -597,11 +592,6 @@ local function c_initgamehooks()
         G and G.pack_cards and G.pack_cards.cards then
             Middleware.c_choose_booster_cards()
         end
-    end)
-
-    --when in menu, start a new run
-    G.FUNCS.go_to_menu = Hook.addcallback(G.FUNCS.go_to_menu, function(...)
-        Middleware.c_start_run()
     end)
 end
 

@@ -261,14 +261,14 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.START_RUN] = {
         if G and G.STATE == G.STATES.MENU then
             return true
         end
-        return false
+        return true
     end,
 }
 Bot.ACTIONPARAMS[Bot.ACTIONS.RETURN_TO_MENU] = { -- always valid
     num_args = 1,
     func = "return_to_menu",
     isvalid = function(action)
-        return true
+        return G.STATE_COMPLETE
     end,
 }
 
@@ -414,9 +414,9 @@ function Bot.start_run()
     return Bot.ACTIONS.START_RUN, { Bot.SETTINGS.stake }, { Bot.SETTINGS.deck }, { Bot.SETTINGS.seed }, { Bot.SETTINGS.challenge }
 end
 
--- function Bot.return_to_menu()
---     return Bot.ACTIONS.RETURN_TO_MENU
--- end
+function Bot.return_to_menu()
+    return Bot.ACTIONS.RETURN_TO_MENU
+end
 
 
 return Bot

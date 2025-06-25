@@ -172,8 +172,21 @@ function Utils.getGamestate()
     _gamestate.jokers = Utils.getJokersData()
     _gamestate.consumables = Utils.getConsumablesData()
     _gamestate.shop = Utils.getShopData()
-    _gamestate.round = G.GAME.current_round
+    _gamestate.round = Utils.getRoundData()
     return _gamestate
+end
+
+function Utils.getRoundData()
+    local _round = { }
+
+    if G and G.GAME and G.GAME.current_round then
+        _round.discards_left = G.GAME.current_round.discards_left
+        _round.hands_left = G.GAME.current_round.hands_left
+        _round.blind_on_deck = G.GAME.blind_on_deck
+        _round.reroll_cost = G.GAME.current_round.reroll_cost
+    end
+
+    return _round
 end
 
 function Utils.parseaction(data)
