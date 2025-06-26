@@ -88,53 +88,9 @@ end
 
 function Botlogger.init()
 
-    Botlogger.q_skip_or_select_blind = List.new()
-    Botlogger.q_select_cards_from_hand = List.new()
-    Botlogger.q_select_shop_action = List.new()
-    Botlogger.q_select_booster_action = List.new()
-    Botlogger.q_sell_jokers = List.new()
-    Botlogger.q_rearrange_jokers = List.new()
-    Botlogger.q_use_or_sell_consumables = List.new()
-    Botlogger.q_rearrange_consumables = List.new()
-    Botlogger.q_rearrange_hand = List.new()
-    Botlogger.q_start_run = List.new()
-    Botlogger.q_return_to_menu = List.new()
     
-    -- Hook bot functions
-    if Bot.SETTINGS.replay == true or Bot.SETTINGS.api == true then
-        -- Redefine Bot functions to just return the next action from their queue
-        Botlogger.nextaction = 1
-        for k,v in pairs(Bot) do
-            if type(Bot[k]) == 'function' then
-                Bot[k] = function()
-                    --sendDebugMessage(k)
-                    if not List.isempty(Botlogger['q_'..k]) then
-                        local _action = List.popright(Botlogger['q_'..k])
-
-                        if Bot.SETTINGS.api == false and _action[1] == Botlogger.nextaction then
-                            Botlogger.nextaction = Botlogger.nextaction + 1
-                            return unpack(_action[2])
-
-                        elseif Bot.SETTINGS.api == false then
-                            List.pushright(Botlogger['q_'..k], _action)
-                            return Bot.ACTIONS.PASS
-
-                        -- We don't care about action order for the API.
-                        -- When the queue is populated, return the choice.
-                        elseif Bot.SETTINGS.api == true then
-                            return unpack(_action[2])
-                        end
-                    else
-                        -- Return an action of "PASS" when the API is not enabled.
-                        -- When API is enabled, nothing is returned, and the system waits for the queue to be populated
-                        if Bot.SETTINGS.api == false then
-                            return Bot.ACTIONS.PASS
-                        end
-                    end
-                end
-            end
-        end 
-    end
+    
+    
 
     -- Read replay file and populate action queues
     if Bot.SETTINGS.replay == true then
@@ -156,11 +112,7 @@ function Botlogger.init()
             end           
         end
     elseif Bot.SETTINGS.replay == false then
-        for k,v in pairs(Bot) do
-            if type(Bot[k]) == 'function' then
-                Bot[k] = Hook.addcallback(Bot[k], Botlogger.logbotdecision)
-            end
-        end
+        
     end
 
     -- TODO Hook run start/end

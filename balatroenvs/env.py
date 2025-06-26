@@ -6,7 +6,6 @@ from enum import Enum
 #from gamestates import cache_state
 import subprocess
 import random
-import gymnasium
 import multiprocessing
 import socket
 
@@ -17,8 +16,13 @@ def is_port_available(port):
             return True
         except socket.error:
             return False
+        
+def get_available_port():
+    with multiprocessing.Pool(processes=1) as pool:
+        available_port = next(port for port in range(12346, 65536) if pool.apply(is_port_available, (port,)))
+    return available_port
 
-class State(Enum):
+class State(Enum): # these enums are lifted from the game code so DO NOT CHANGE THEM
     SELECTING_HAND = 1
     HAND_PLAYED = 2
     DRAW_TO_HAND = 3
@@ -39,7 +43,7 @@ class State(Enum):
     BUFFOON_PACK = 18
     NEW_ROUND = 19,
 
-class Actions(Enum):
+class Actions(Enum): # these enums are from the lua mod. you can add new ones but it requires changes in the lua mod as well
     SELECT_BLIND = 1
     SKIP_BLIND = 2
     PLAY_HAND = 3
@@ -59,142 +63,48 @@ class Actions(Enum):
     REARRANGE_HAND = 17
     PASS = 18
     START_RUN = 19
-    SEND_GAMESTATE = 20
+    
     RETURN_TO_MENU = 21
 
 
 class BalatroEnvBase:
-    def __init__(self, policy_states):
-        policy_states = policy_states
-        self.port = self.get_available_port()
-        self.bot = BalatroBotBase(deck="Red Deck", stake=1, seed=None, challenge=None,
-                                  bot_port=self.port, verbose=True, exposed_to_policy=policy_states)
-        self.bot.start_balatro_instance()
-        time.sleep(1)
-        self.bot.connect_socket()
-
-    def get_available_port(self):
-        with multiprocessing.Pool(processes=1) as pool:
-            available_port = next(port for port in range(12346, 65536) if pool.apply(is_port_available, (port,)))
-        return available_port
-    
-    def _step(self, action):
-        # Send the action to the bot
-        self.bot.do_policy_action(action)
-        
-        return self.bot.G      
-
-    def _reset(self):
-        # Reset the bot
-        self.bot.start_run()
-        return self.bot.G
-        
-    def close(self):
-        # Stop the Balatro instance if it's running
-        if self.bot.balatro_instance:
-            self.bot.stop_balatro_instance()
-        
-        # Close the socket connection if it's open
-        if self.bot.sock:
-            self.bot.sock.close()
-            self.bot.sock = None
-        
-        # Reset the bot's running state
-        self.bot.running = False
-        
-        # Clear any stored state
-        self.bot.G = None
-        self.bot.state = {}
-    
-    def is_run_finished(self):
-        return self.bot.G["waitingFor"] == "return_to_menu"
-    
-    def run_as_cli(self):
-        while True:
-            res = self.bot.run_steps()
-            print(res)
-            print(self.bot.G["waitingFor"])
-            userinput = input("Enter action as JSON with the format: [Action, [params]] or 'exit' to quit: ")
-            if userinput.lower() == 'exit':
-                print("Exiting CLI...")
-                break
-            try:
-                parsed = json.loads(userinput)
-                print(f"Parsed action: {parsed}")
-                self.bot.do_policy_action(parsed)
-            except json.JSONDecodeError as e:
-                print(f"Invalid input format: {e}")
-
-        self.close()
-
-
-class BalatroBotBase:
     def __init__(
         self,
-        deck: str,
-        stake: int = 1,
-        seed: str = None,
-        challenge: str = None,
-        bot_port: int = 12346,
         verbose = False,
-        exposed_to_policy = [],
+        policy_states = [],
     ):
         self.G = None
-        self.deck = deck
-        self.stake = stake
-        self.seed = seed
-        self.challenge = challenge
-
-        self.bot_port = bot_port
-
-        self.addr = ("localhost", self.bot_port)
+        self.port = get_available_port()
+        self.addr = ("localhost", self.port)
         self.running = False
         self.balatro_instance = None
-
         self.sock = None
-
-        self.state = {}
         self.verbose = verbose
-        self.exposed_to_policy = exposed_to_policy
+        self.policy_states = policy_states
         self.first_run = True
-        self.last_action_no = -1
-        self.last_action_timestamp = time.time()
-        self.last_cmd = "Hello"
 
-    def skip_or_select_blind(self, G):
-        return [Actions.SELECT_BLIND]
+        # State handlers are now expected to be populated by subclasses
+        self.state_handlers = {}
+        #init state handlers for non-interactive states
+        self.state_handlers[State.HAND_PLAYED] = self.pass_action
+        self.state_handlers[State.DRAW_TO_HAND] = self.pass_action
+        self.start_balatro_instance()
+        time.sleep(1)
+        self.connect_socket()
 
-    def select_shop_action(self, G):
-        return [Actions.END_SHOP]
-
-    def select_booster_action(self, G):
-        return [Actions.SKIP_BOOSTER_PACK]
-
-    def sell_jokers(self, G):
-        return [Actions.SELL_JOKER, []]
-
-    def rearrange_jokers(self, G):
-        return [Actions.REARRANGE_JOKERS, []]
-
-    def use_or_sell_consumables(self, G):
-        return [Actions.USE_CONSUMABLE, []]
-
-    def rearrange_consumables(self, G):
-        return [Actions.REARRANGE_CONSUMABLES, []]
-
-    def rearrange_hand(self, G):
-        return [Actions.REARRANGE_HAND, [1,2,4,3,5,6,7,8]]
-    
-    def select_cards_from_hand(self, G):
-        return [Actions.PLAY_HAND, [1]]
-
+    def pass_action(self, state):
+        """
+        A no-op action that can be used to pass the turn or skip an action.
+        This is useful in cases where the bot does not want to take any action.
+        """
+        return [Actions.PASS]
 
     def start_balatro_instance(self):
         balatro_exec_path = (
             r"C:\Program Files (x86)\Steam\steamapps\common\Balatro\Balatro.exe"
         )
         self.balatro_instance = subprocess.Popen(
-            [balatro_exec_path, str(self.bot_port)]
+            [balatro_exec_path, str(self.port)]
         )
         
         # Ping the server until we get a response
@@ -209,7 +119,8 @@ class BalatroBotBase:
                     print("Connected to Balatro instance")
                     return
             except Exception as e:
-                print(f"Waiting for Balatro to start... (attempt {attempt + 1}/{max_attempts})")
+                if self.verbose:
+                    print(f"Attempt {attempt + 1}/{max_attempts} failed: {e}")
                 time.sleep(1)
             attempt += 1
         
@@ -231,9 +142,6 @@ class BalatroBotBase:
             print(f"Sending command: {cmd}")
         msg = bytes(cmd, "utf-8")
         self.sock.sendto(msg, self.addr)
-        self.last_action_no += 1
-        self.last_action_timestamp = time.time()
-        self.last_action = cmd
 
     def actionToCmd(self, action):
         result = []
@@ -248,160 +156,214 @@ class BalatroBotBase:
 
         return "|".join(result)
 
-    def verifyimplemented(self):
-        try:
-            self.skip_or_select_blind({})
-            self.select_cards_from_hand({})
-            self.select_shop_action({})
-            self.select_booster_action({})
-            self.sell_jokers({})
-            self.rearrange_jokers({})
-            self.use_or_sell_consumables({})
-            self.rearrange_consumables({})
-            self.rearrange_hand({})
-        except NotImplementedError as e:
-            print(e)
-            sys.exit(0)
-        except:
-            pass
-
     def random_seed(self):
         # e.g. 1OGB5WO
         return "".join(random.choices("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", k=7))
 
-    def chooseaction(self):
-        if "state" in self.G:
-            if self.G["state"] == State.GAME_OVER:
-                self.running = False
+    def handle_state(self, state):
+        game_state_enum = State(state['state'])
 
-        match self.G["waitingFor"]:
-            case "start_run":
-                seed = self.seed
-                if seed is None:
-                    seed = self.random_seed()
-                return [
-                    Actions.START_RUN,
-                    self.stake,
-                    self.deck,
-                    seed,
-                    self.challenge,
-                ]
-            case "skip_or_select_blind":
-                return self.skip_or_select_blind(self.G)
-            case "select_cards_from_hand":
-                return self.select_cards_from_hand(self.G)
-            case "select_shop_action":
-                return self.select_shop_action(self.G)
-            case "select_booster_action":
-                return self.select_booster_action(self.G)
-            case "sell_jokers":
-                return self.sell_jokers(self.G)
-            case "rearrange_jokers":
-                return self.rearrange_jokers(self.G)
-            case "use_or_sell_consumables":
-                return self.use_or_sell_consumables(self.G)
-            case "rearrange_consumables":
-                return self.rearrange_consumables(self.G)
-            case "rearrange_hand":
-                return self.rearrange_hand(self.G)
-            case "return_to_menu":
-                return [Actions.RETURN_TO_MENU]
-        raise ValueError(f"State {self.G['waitingFor']} not implemented in chooseaction or escalated to policy")
-            
+        if game_state_enum == State.GAME_OVER:
+            self.running = False
+            return None
 
-    def run_step(self):
-        if self.running:
-            self.ping()
-            jsondata = {}
+        if game_state_enum in self.policy_states:
+            self.running = False # Stop the run loop to escalate to policy
+            return None
+
+        handler = self.state_handlers.get(game_state_enum)
+        if handler:
+            return handler(state)
+
+        raise NotImplementedError(f"No handler implemented for state {game_state_enum.name} and it was not escalated to policy.")
+
+    def wait_response(self, timeout=1):
+        """
+        Wait for a response from the server.
+        This is a placeholder for an async implementation.
+        """
+        start_time = time.time()
+        while time.time() - start_time < timeout:
             try:
                 data = self.sock.recv(65536)
-                jsondata = json.loads(data)
+                if data:
+                    return json.loads(data)
+            except socket.timeout:
+                continue
+        print("No response received within the timeout period.")
+        return {}
 
-                if "response" in jsondata:
-                    print(jsondata["response"])
-                    return False # error
+    def run_step(self):
+        if not self.running:
+            print("Environment is not running. Exiting run_step.")
+            return False
+
+        self.ping()
+        print("Ping sent to Balatro instance.")
+        try:
+            self.G = self.wait_response()
+            state = self.G.get('state', None)
+            if not state:
+                return False
+            for ps in self.policy_states:
+                if state == ps.value:
+                    print(f"Game state {state} is in policy states. Waiting for policy action.")
+                    return True
+            
+            if self.G.get('waitingForAction'):
+                action = self.handle_state(self.G)
+                if action:
+                    cmdstr = self.actionToCmd(action)
+                    self.sendcmd(cmdstr)
+                    data = self.wait_response()
+                    print(f"Received data: {data}")
+                    time.sleep(0.5)
                 else:
-                    self.G = jsondata
-                    #print(self.G)
-                    if self.G["waitingForAction"]:
-                        if self.verbose:
-                            print(f"Waiting for action: {self.G['waitingFor']}")
-                        if self.G["waitingFor"] in self.exposed_to_policy:
-                            self.running = False
-                            return True # Escalate to Policy
-                        else:
-                            action = self.chooseaction()
-                            if action == None:
-                                raise ValueError("All actions must return a value!")
+                    raise NotImplementedError(f"No action returned from handle_state for state: {state}")
+            else:
+                time.sleep(0.5)
 
-                            cmdstr = self.actionToCmd(action)
-                            self.sendcmd(cmdstr)
-                            print(f"Action sent: {cmdstr}")
-                    else:
-                        #if time.time() - self.last_action_timestamp > 1:
-                        #    #reissue the last action if no response in 2 seconds
-                        #    self.last_action_no -= 1
-                        #    cmdstr = self.last_action
-                        #    self.sendcmd(cmdstr)
 
-                        # sleep for a bit to avoid busy waiting
-                        time.sleep(0.1)
-                        if self.verbose:
-                            pass
-            except socket.error as e:
-                print(e)
-                print("Socket error, reconnecting...")
-                self.connect_socket()
-            except Exception as e:
-                raise
+        except socket.timeout:
+            print("Socket timed out. Is Balatro running?")
+            self.running = False
+        except socket.error as e:
+            print(f"Socket error: {e}, reconnecting...")
+            self.connect_socket()
+        except json.JSONDecodeError as e:
+            print(f"Failed to decode JSON: {e}")
+        except Exception as e:
+            print(f"An unexpected error occurred in run_step: {e}")
+            self.running = False
+        finally:
+            time.sleep(0.5)  # Ensure we don't flood the server with requests
+        return False
 
     def connect_socket(self):
         if self.sock is None:
-            self.verifyimplemented()
-            self.state = {}
             self.G = None
-
             self.running = True
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.settimeout(10)
             self.sock.connect(self.addr)
 
-    def do_policy_action(self, action):
-        max_attempts = 3
-        attempt = 0
-        while attempt < max_attempts:
-            try:
-                actionname = action[0].name if isinstance(action[0], Actions) else str(action[0])
-                #print(f"Executing action: {actionname} (Attempt {attempt + 1}/{max_attempts})")
-                self.connect_socket()
-                cmdstr = self.actionToCmd(action)
-                self.sendcmd(cmdstr)
-                self.run_steps()
-                break  # If successful, exit the loop
-            except Exception as e:
-                print(f"Error executing policy action: {e}")
-                attempt += 1
-                if attempt < max_attempts:
-                    print(f"Retrying... (Attempt {attempt + 1}/{max_attempts})")
-                    time.sleep(1)  # Wait a bit before retrying
-                else:
-                    #print("Max attempts reached. Failed to execute action.")
-                    self.running = False
+    def run_until_policy(self):
+        escalate = False
+        while not escalate:
+            escalate = self.run_step()
+        return self.G # Return the game state that caused the loop to stop
 
-    def start_run(self):
-        if self.first_run:
-            self.first_run = False
-            self.run_steps()
+    def do_policy_action(self, action):
+        if self.G.get('waitingForAction'):
+            # First, validate that the action is valid for the current state.
+            # This is a crucial safeguard.
+            # NOTE: We need to implement this validation logic.
+            # For now, we assume the policy is correct.
+
+            cmdstr = self.actionToCmd(action)
+            self.sendcmd(cmdstr)
+
+            # After sending the action, run until the next policy decision is needed
+            return self.run_until_policy()
         else:
-            action = [Actions.RETURN_TO_MENU]
-            self.do_policy_action(action)
+            print("Warning: do_policy_action called when not waiting for action. Ignoring.")
+            return self.G
 
     def run_steps(self):
         self.running = True
         while self.running:
             self.run_step()
 
-if __name__ == "__main__":
-    env = BalatroEnvBase(policy_states=[])
-    print(env._reset())
-    env.run_as_cli()
+    def close(self):
+        # Stop the Balatro instance if it's running
+        if self.balatro_instance:
+            self.stop_balatro_instance()
+        
+        # Close the socket connection if it's open
+        if self.sock:
+            self.sock.close()
+            self.sock = None
+        
+        # Reset the bot's running state
+        self.running = False
+        
+        # Clear any stored state
+        self.G = None
+
+    def run_as_cli(self):
+        self.running = True
+        print("Starting Balatro environment in CLI mode.")
+        while self.running:
+            self.run_step()
+        print("Balatro environment has been stopped.")
+
+    def handle_state(self, state):
+        game_state_enum = State(state['state'])
+
+        if game_state_enum in self.policy_states:
+            return None  # Stop the run loop to escalate to policy
+
+        handler = self.state_handlers.get(game_state_enum)
+
+        if handler:
+            return handler(state)
+        else:
+            if self.verbose:
+                print(f"No handler for state {game_state_enum.name}, and it is not in policy_states. Waiting.")
+            return None
+
+class PlayHandEnv(BalatroEnvBase):
+    """
+    A Balatro environment that simplifies the game to only require policy decisions
+    for playing hands. All other states are handled automatically with simple, default logic.
+    """
+    def __init__(self, verbose=False):
+        # The policy is only invoked when the game is in the SELECTING_HAND state.
+        super().__init__(verbose=verbose, policy_states=[State.SELECTING_HAND])
+
+        # Define handlers for states that should be automated.
+        self.state_handlers[State.MENU] = self.handle_menu
+        self.state_handlers[State.BLIND_SELECT] = self.handle_blind_select
+        self.state_handlers[State.SHOP] = self.handle_shop
+        self.state_handlers[State.GAME_OVER] = self.handle_game_over
+
+    def handle_menu(self, state):
+        """Starts a new run from the main menu."""
+        return [Actions.START_RUN, 1, "Red Deck", self.random_seed(), None]
+
+    def handle_blind_select(self, state):
+        """Automatically selects the first available blind."""
+        return [Actions.SELECT_BLIND]
+
+    def handle_shop(self, state):
+        """Automatically ends the shopping phase without buying anything."""
+        return [Actions.END_SHOP]
+
+    def handle_booster_pack(self, state):
+        """Skips any booster pack."""
+        return [Actions.SKIP_BOOSTER_PACK]
+
+    def handle_pass(self, state):
+        """A general handler to pass on a state where no specific action is desired."""
+        return [Actions.PASS]
+
+    def handle_game_over(self, state):
+        """Stops the environment when the game is over."""
+        self.running = False
+        return None
+
+if __name__ == '__main__':
+    # Example of how to run the environment
+    env = PlayHandEnv(verbose=True)
+    
+    # The environment will run until it needs a policy decision (or the game ends).
+    game_state = env.run_until_policy()
+    while True:
+        if game_state and game_state['state'] == State.SELECTING_HAND.value:
+            print("Environment is waiting for a 'play hand' action.")
+            # In a real scenario, a policy model would decide which cards to play.
+            # For this example, we'll just play the first 5 cards in hand.
+            action = [Actions.PLAY_HAND, [1, 2, 3, 4, 5]]
+            print(f"Policy action: {action}")
+            env.do_policy_action(action)
+            game_state = env.run_until_policy()

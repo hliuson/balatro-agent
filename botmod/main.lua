@@ -21,15 +21,13 @@ function SMODS.INIT.BALATROBOT()
 	assert(load(NFS.read(mw.path .. "lib/json.lua")))()
 
 	-- Mod specific files
-	assert(load(NFS.read(mw.path .. "src/utils.lua")))()
 	assert(load(NFS.read(mw.path .. "src/bot.lua")))()
-	assert(load(NFS.read(mw.path .. "src/middleware.lua")))()
+	assert(load(NFS.read(mw.path .. "src/utils.lua")))()
+	assert(load(NFS.read(mw.path .. "src/actions.lua")))()
 	assert(load(NFS.read(mw.path .. "src/botlogger.lua")))()
 	assert(load(NFS.read(mw.path .. "src/api.lua")))()
 
 	sendDebugMessage("Balatrobot v0.3 loaded")
-
-	Middleware.hookbalatro()
 
 	Botlogger.path = mw.path
 	Botlogger.init()
