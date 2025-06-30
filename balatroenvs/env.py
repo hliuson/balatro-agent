@@ -2,6 +2,8 @@ import sys
 import json
 import socket
 import time
+import os
+import platform
 from enum import Enum
 #from gamestates import cache_state
 import subprocess
@@ -135,12 +137,64 @@ class BalatroEnvBase:
         return json.loads(data)
 
     def start_balatro_instance(self):
-        balatro_exec_path = (
-            r"C:\Program Files (x86)\Steam\steamapps\common\Balatro\Balatro.exe"
-        )
-        self.balatro_instance = subprocess.Popen(
-            [balatro_exec_path, str(self.port)]
-        )
+        # Get Balatro executable path from environment variable
+        balatro_exec_path = os.getenv('BALATRO_EXEC_PATH')
+        
+        if not balatro_exec_path:
+            # Fallback to default paths based on platform
+            if platform.system() == "Windows":
+                balatro_exec_path = r"C:\Program Files (x86)\Steam\steamapps\common\Balatro\Balatro.exe"
+            elif platform.system() == "Linux":
+                # Try different possible paths for Linux
+                possible_paths = [
+                    os.path.expanduser("~/.steam/steam/steamapps/common/Balatro/Balatro"),
+                    "/app/balatro-linux",  # Docker path
+                    "/app/balatro.love",   # .love file path
+                    "./balatro.love"       # Local .love file
+                ]
+                balatro_exec_path = None
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        balatro_exec_path = path
+                        break
+                if not balatro_exec_path:
+                    raise FileNotFoundError(f"Balatro not found in any of: {possible_paths}")
+            elif platform.system() == "Darwin":  # macOS
+                balatro_exec_path = os.path.expanduser("~/Library/Application Support/Steam/steamapps/common/Balatro/Balatro.app/Contents/MacOS/Balatro")
+            else:
+                raise Exception(f"Unsupported platform: {platform.system()}")
+        
+        # Check if the executable/file exists
+        if not os.path.exists(balatro_exec_path):
+            raise FileNotFoundError(f"Balatro executable not found at: {balatro_exec_path}")
+        
+        # Build the command based on file type
+        if balatro_exec_path.endswith('.love'):
+            # For .love files, use the love command
+            cmd = ['love', balatro_exec_path, str(self.port)]
+        else:
+            # For native executables
+            cmd = [balatro_exec_path, str(self.port)]
+        
+        # On Linux, check if we need to use xvfb for headless operation
+        if platform.system() == "Linux":
+            # Check if DISPLAY is set, if not, use xvfb
+            if not os.getenv('DISPLAY'):
+                if self.verbose:
+                    print("No DISPLAY environment variable found. Using xvfb for headless operation.")
+                # Check if xvfb-run is available
+                try:
+                    subprocess.run(['which', 'xvfb-run'], check=True, capture_output=True)
+                    cmd = ['xvfb-run', '-a', '-s', '-screen 0 1024x768x24'] + cmd
+                except subprocess.CalledProcessError:
+                    print("Warning: xvfb-run not found. Install xvfb package for headless operation.")
+                    print("On Ubuntu/Debian: sudo apt-get install xvfb")
+                    print("On RHEL/CentOS: sudo yum install xorg-x11-server-Xvfb")
+        
+        if self.verbose:
+            print(f"Starting Balatro with command: {' '.join(cmd)}")
+        
+        self.balatro_instance = subprocess.Popen(cmd)
         if self.verbose:
             print(f"Balatro instance started with PID: {self.balatro_instance.pid} on port {self.port}")
         
