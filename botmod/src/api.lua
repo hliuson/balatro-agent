@@ -22,8 +22,10 @@ local INTERACTIVE_STATES = {
     [G.STATES.STANDARD_PACK] = true,
     [G.STATES.BUFFOON_PACK] = true,
     [G.STATES.PLANET_PACK] = true,
-    [G.STATES.GAME_OVER] = true
+    [G.STATES.GAME_OVER] = true,
+    [G.STATES.NEW_ROUND] = true,
 }
+
 
 -- Dispatch table to call the appropriate function in actions.lua based on the action enum
 local ACTION_DISPATCH = {
@@ -46,6 +48,8 @@ local ACTION_DISPATCH = {
     [Bot.ACTIONS.REARRANGE_HAND] = function(action) Actions.rearrange_hand(action[2]) end,
     [Bot.ACTIONS.START_RUN] = function(action) Actions.start_run(action[2] and action[2][1], action[3] and action[3][1], action[4] and action[4][1], action[5] and action[5][1]) end,
     [Bot.ACTIONS.RETURN_TO_MENU] = function(action) Actions.return_to_menu() end,
+    [Bot.ACTIONS.PASS] = function(action) Actions.pass() end,
+    [Bot.ACTIONS.CASH_OUT] = function(action) Actions.cash_out() end,
 }
 
 -- Packages and sends the current game state to the API client.
@@ -70,10 +74,36 @@ function BalatrobotAPI.respond(str)
     end
 end
 
+function BalatrobotAPI.stablestate()
+    -- Check if the game state is stable and not in a transition
+    local stable = true
+    if not G.CONTROLLER or G.CONTROLLER.locked then
+        stable = false
+    end
+    if not INTERACTIVE_STATES[G.STATE] then
+        stable = false
+    end
+    if G.STATES ~= G.STATES.MENU and not G.STATE_COMPLETE then
+        stable = false
+    end
+    debug_str = string.format("Game stable: %s, Controller locked: %s, State: %s, State complete: %s, Action executing: %s",
+        tostring(stable), tostring(G.CONTROLLER.locked), G.STATE, tostring(G.STATE_COMPLETE), tostring(Actions.executing))
+    --sendDebugMessage(debug_str)
+    return stable
+end
+
 function BalatrobotAPI.updatereadiness()
-    if not BalatrobotAPI.waitingForAction and G.STATE_COMPLETE and INTERACTIVE_STATES[G.STATE] and not Actions.executing then
-        BalatrobotAPI.waitingForAction = true -- Signal that we are ready for an action
-        BalatrobotAPI.action_no = BalatrobotAPI.action_no + 1
+    -- Readiness requires both a stable game state AND the action execution flag to be false.
+    local is_game_interactive = BalatrobotAPI.stablestate()
+
+    --debug_str = string.format("Game interactive: %s, Action executing: %s, Controller locked: %s, State: %s",
+    --    tostring(is_game_interactive), tostring(Actions.executing), tostring(G.CONTROLLER.locked), G.STATE)
+
+    if is_game_interactive and not Actions.executing then
+        if not BalatrobotAPI.waitingForAction then
+            BalatrobotAPI.waitingForAction = true
+            BalatrobotAPI.action_no = BalatrobotAPI.action_no + 1
+        end
     end
 end
 
@@ -88,46 +118,42 @@ function BalatrobotAPI.update(dt)
     end
 
     data, msg_or_ip, port_or_nil = BalatrobotAPI.socket:receivefrom()
-	if data then
-        if data == 'HELLO\n' or data == 'HELLO' then
-            BalatrobotAPI.notifyapiclient()
+    if data then
+        local command = data:match("^[^|]+")
+
+        if command == 'STATUS' then
+            local status = BalatrobotAPI.waitingForAction and "READY" or "BUSY"
+            BalatrobotAPI.respond({ status = status})
+
+        elseif command == 'GET_STATE' then
+            if BalatrobotAPI.waitingForAction then
+                BalatrobotAPI.notifyapiclient()
+            else
+                BalatrobotAPI.respond({ error = "Bot is busy" })
+            end
         else
             if not BalatrobotAPI.waitingForAction then
-                sendDebugMessage("Received command while not ready: " .. data)
-                BalatrobotAPI.respond("Error: Not ready for an action") 
-                -- Not ready for an action, ignore the command
+                BalatrobotAPI.respond({ error = "Bot is not ready for actions" })
                 return
             end
-            sendDebugMessage("Received data: " .. data)
+
             local _action = Utils.parseaction(data)
             local _err = Utils.validateAction(_action)
-
-            if _err ~= Utils.ERROR.NOERROR then
-                sendDebugMessage("Error in action: " .. tostring(_err) .. " for action: " .. tostring(_action))
-                if _err == Utils.ERROR.NUMPARAMS then
-                    BalatrobotAPI.respond("Error: Incorrect number of params for action " .. _action[1])
-                elseif _err == Utils.ERROR.MSGFORMAT then
-                    BalatrobotAPI.respond("Error: Incorrect message format: " .. data .. "; Should be ACTION|arg1|arg2")
-                elseif _err == Utils.ERROR.INVALIDACTION then
-                    BalatrobotAPI.respond("Error: Action invalid for action " .. _action[1])
-                end
-                -- Do not set waitingForAction to false; we are still waiting for a *valid* action
-                BalatrobotAPI.action_no = BalatrobotAPI.action_no + 1
-            else
-                BalatrobotAPI.respond("Success: Action " .. _action[1] .. " received")
-                sendDebugMessage("Valid action received: " .. tostring(_action[1]))
-                -- Action is valid, so execute it
-                BalatrobotAPI.waitingForAction = false -- Signal that we are now busy
-                Actions.executing = true -- Set the executing flag to true
-
+            if _err == Utils.ERROR.NOERROR then
+                BalatrobotAPI.respond({response = "Action received: " .. _action[1]})
+                sendDebugMessage("Set actions.executing to true for action: " .. _action[1])
+                Actions.executing = true
+                BalatrobotAPI.waitingForAction = false
                 local dispatch_func = ACTION_DISPATCH[_action[1]]
-                if dispatch_func then
-                    dispatch_func(_action)
-                else
-                    sendDebugMessage("Error: No dispatch function for action " .. tostring(_action[1]))
-                    -- If something is wrong with the dispatch, become ready again
-                    BalatrobotAPI.waitingForAction = true
-                    BalatrobotAPI.action_no = BalatrobotAPI.action_no + 1
+                if dispatch_func then dispatch_func(_action) end
+            else
+                -- Handle validation errors
+                if _err == Utils.ERROR.NUMPARAMS then
+                    BalatrobotAPI.respond({ error = "Error: Invalid number of parameters for action " .. _action[1] })
+                elseif _err == Utils.ERROR.MSGFORMAT then
+                    BalatrobotAPI.respond({ error = "Error: Invalid message format for action " .. _action[1] })
+                elseif _err == Utils.ERROR.INVALIDACTION then
+                    BalatrobotAPI.respond({ error = "Error: Invalid action " .. _action[1] })
                 end
             end
         end
@@ -179,10 +205,11 @@ function BalatrobotAPI.init()
     G.E_MANAGER:add_event(Event({
         trigger = 'after', delay = 3, blocking = false,
         func = function()
-            if not BalatrobotAPI.waitingForAction then
-                sendDebugMessage("Initial load timeout reached. Forcing waitingForAction to true.")
-                BalatrobotAPI.waitingForAction = true
-            end
+            --if not BalatrobotAPI.waitingForAction then
+            --    sendDebugMessage("Initial load timeout reached. Forcing waitingForAction to true.")
+            --    BalatrobotAPI.waitingForAction = true
+            --end
+            G.STATE_COMPLETE = true
             return true
         end
     }))

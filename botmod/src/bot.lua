@@ -23,6 +23,7 @@ Bot.ACTIONS = {
     PASS = 18,
     START_RUN = 19,
     RETURN_TO_MENU = 20,
+    CASH_OUT = 21
 }
 
 Bot.ACTIONPARAMS = { }
@@ -251,6 +252,16 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.RETURN_TO_MENU] = { -- always valid
     num_args = 1,
     isvalid = function(action)
         return G.STATE_COMPLETE
+    end,
+}
+
+Bot.ACTIONPARAMS[Bot.ACTIONS.CASH_OUT] = {
+    num_args = 1,
+    isvalid = function(action)
+        if G and G.STATE == G.STATES.ROUND_EVAL then
+            return true
+        end
+        return false
     end,
 }
 
