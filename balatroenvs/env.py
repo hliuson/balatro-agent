@@ -145,36 +145,18 @@ class BalatroEnvBase:
             if platform.system() == "Windows":
                 balatro_exec_path = r"C:\Program Files (x86)\Steam\steamapps\common\Balatro\Balatro.exe"
             elif platform.system() == "Linux":
-                # Try different possible paths for Linux
-                possible_paths = [
-                    os.path.expanduser("~/.steam/steam/steamapps/common/Balatro/Balatro"),
-                    "/app/balatro-linux",  # Docker path
-                    "/app/balatro.love",   # .love file path
-                    "./balatro.love"       # Local .love file
-                ]
-                balatro_exec_path = None
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        balatro_exec_path = path
-                        break
-                if not balatro_exec_path:
-                    raise FileNotFoundError(f"Balatro not found in any of: {possible_paths}")
+                balatro_exec_path = os.path.expanduser("~/.steam/steam/steamapps/common/Balatro/Balatro")
             elif platform.system() == "Darwin":  # macOS
                 balatro_exec_path = os.path.expanduser("~/Library/Application Support/Steam/steamapps/common/Balatro/Balatro.app/Contents/MacOS/Balatro")
             else:
                 raise Exception(f"Unsupported platform: {platform.system()}")
         
-        # Check if the executable/file exists
+        # Check if the executable exists
         if not os.path.exists(balatro_exec_path):
             raise FileNotFoundError(f"Balatro executable not found at: {balatro_exec_path}")
         
-        # Build the command based on file type
-        if balatro_exec_path.endswith('.love'):
-            # For .love files, use the love command
-            cmd = ['love', balatro_exec_path, str(self.port)]
-        else:
-            # For native executables
-            cmd = [balatro_exec_path, str(self.port)]
+        # Build the command
+        cmd = [balatro_exec_path, str(self.port)]
         
         # On Linux, check if we need to use xvfb for headless operation
         if platform.system() == "Linux":
