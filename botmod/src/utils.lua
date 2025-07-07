@@ -1,25 +1,100 @@
-Utils = { }
+Utils = {}
+
+-- Safely gets a value from a nested table
+function safe_get(t, keys)
+    local current = t
+    for i, key in ipairs(keys) do
+        if type(current) ~= 'table' or current[key] == nil then
+            return nil
+        end
+        current = current[key]
+    end
+    return current
+end
 
 function Utils.getCardData(card)
-    local _card = { }
+    if not card then return nil end
+    local _card = {}
 
     _card.label = card.label
-    _card.name = card.config.card.name
-    _card.suit = card.config.card.suit
-    _card.value = card.config.card.value
-    _card.card_key = card.config.card_key
+    _card.name = safe_get(card, { 'ability', 'name' }) or safe_get(card, { 'config', 'center', 'name' })
+    _card.set = safe_get(card, { 'ability', 'set' })
+
+    if safe_get(card, { 'config', 'card' }) and next(card.config.card) ~= nil then
+        _card.suit = safe_get(card, { 'base', 'suit' })
+        _card.value = safe_get(card, { 'base', 'value' })
+        _card.card_key = safe_get(card, { 'config', 'card_key' })
+    end
+
+    if card.config and card.config.center then
+        _card.center_key = card.config.center_key
+        _card.cost = card.cost
+        _card.sell_cost = card.sell_cost
+    end
+
+    if card.ability then
+        _card.debuff = card.debuff
+        _card.ability_name = card.ability.name
+        _card.mult = card.ability.mult
+        _card.x_mult = card.ability.x_mult
+        _card.chips = card.ability.bonus
+        _card.perma_bonus = card.ability.perma_bonus
+        if card.ability.extra and type(card.ability.extra) == 'table' then
+            _card.extra = {}
+            for k, v in pairs(card.ability.extra) do
+                if type(v) ~= 'function' then
+                    _card.extra[k] = v
+                end
+            end
+        end
+    end
+
+    if card.edition then
+        _card.edition = card.edition
+    end
+
+    if card.seal then
+        _card.seal = card.seal
+    end
+    
+    if card.sticker then
+        _card.sticker = card.sticker
+    end
+    if card.sticker_run then
+        _card.sticker_run = card.sticker_run
+    end
+
+    _card.eternal = safe_get(card, { 'ability', 'eternal' })
+    _card.perishable = safe_get(card, { 'ability', 'perishable' })
+    if _card.perishable then
+        _card.perish_tally = safe_get(card, { 'ability', 'perish_tally' })
+    end
+    _card.rental = safe_get(card, { 'ability', 'rental' })
+    _card.pinned = card.pinned
 
     return _card
 end
 
 function Utils.getDeckData()
-    local _deck = { }
+    local _deck = { cards = {}, discards = {} }
+
+    if G and G.deck and G.deck.cards then
+        for i = 1, #G.deck.cards do
+            _deck.cards[i] = Utils.getCardData(G.deck.cards[i])
+        end
+    end
+
+    if G and G.discard and G.discard.cards then
+        for i = 1, #G.discard.cards do
+            _deck.discards[i] = Utils.getCardData(G.discard.cards[i])
+        end
+    end
 
     return _deck
 end
 
 function Utils.getHandData()
-    local _hand = { }
+    local _hand = {}
 
     if G and G.hand and G.hand.cards then
         for i = 1, #G.hand.cards do
@@ -32,7 +107,7 @@ function Utils.getHandData()
 end
 
 function Utils.getJokersData()
-    local _jokers = { }
+    local _jokers = {}
 
     if G and G.jokers and G.jokers.cards then
         for i = 1, #G.jokers.cards do
@@ -45,11 +120,11 @@ function Utils.getJokersData()
 end
 
 function Utils.getConsumablesData()
-    local _consumables = { }
+    local _consumables = {}
 
     if G and G.consumables and G.consumables.cards then
-        for i = 1, #G.consumeables.cards do
-            local _card = Utils.getCardData(G.consumeables.cards[i])
+        for i = 1, #G.consumables.cards do
+            local _card = Utils.getCardData(G.consumables.cards[i])
             _consumables[i] = _card
         end
     end
@@ -58,135 +133,200 @@ function Utils.getConsumablesData()
 end
 
 function Utils.getBlindData()
-    local _blinds = { }
+    local _blinds = { current = nil, small = nil, big = nil, boss = nil, ondeck = nil }
 
+    local function get_blind_info(key)
+        if not key or not G.P_BLINDS[key] then return nil end
+        local proto = G.P_BLINDS[key]
+        local info = {
+            name = proto.name,
+            dollars = proto.dollars,
+            mult = proto.mult,
+            debuff = proto.debuff,
+            boss = proto.boss,
+            key = key
+        }
+        if G.GAME and G.GAME.round_resets and get_blind_amount and G.GAME.starting_params then
+             info.chips = get_blind_amount(G.GAME.round_resets.ante) * info.mult * G.GAME.starting_params.ante_scaling
+        end
+        return info
+    end
+
+    if G and G.GAME and G.GAME.blind and G.GAME.blind.config and G.GAME.blind.config.blind then
+        local b = G.GAME.blind
+        _blinds.current = {
+            name = b.name,
+            dollars = b.dollars,
+            mult = b.mult,
+            chips = b.chips,
+            debuff = b.debuff,
+            boss = b.boss,
+            disabled = b.disabled,
+            key = b.config.blind.key
+        }
+    end
+
+    if G and G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices then
+        local choices = G.GAME.round_resets.blind_choices
+        _blinds.small = get_blind_info(choices.Small)
+        _blinds.big = get_blind_info(choices.Big)
+        _blinds.boss = get_blind_info(choices.Boss)
+    end
+    
     if G and G.GAME then
-        _blinds.ondeck = G.GAME.blind_on_deck
+        _blinds.ondeck_key = G.GAME.blind_on_deck
+        _blinds.ondeck = get_blind_info(G.GAME.blind_on_deck)
     end
 
     return _blinds
 end
 
 function Utils.getAnteData()
-    local _ante = { }
+    local _ante = {}
+    if G and G.GAME then
+        if G.GAME.round_resets then
+            _ante.ante = G.GAME.round_resets.ante
+            _ante.blind_ante = G.GAME.round_resets.blind_ante
+            _ante.blind_states = G.GAME.round_resets.blind_states
+        end
+        _ante.win_ante = G.GAME.win_ante
+    end
     _ante.blinds = Utils.getBlindData()
 
     return _ante
 end
 
 function Utils.getBackData()
-    local _back = { }
-
+    local _back = {}
+    if G and G.GAME and G.GAME.selected_back_key and G.P_CENTERS[G.GAME.selected_back_key] then
+        local back_proto = G.P_CENTERS[G.GAME.selected_back_key]
+        _back.name = back_proto.name
+        _back.key = G.GAME.selected_back_key
+        _back.config = back_proto.config
+    end
     return _back
 end
 
 function Utils.getShopData()
-    local _shop = { }
+    local _shop = { jokers = {}, boosters = {}, vouchers = {}, tarots = {}, planets = {}, playing_cards = {} }
     if not G or not G.shop then return _shop end
     
-    _shop.reroll_cost = G.GAME.current_round.reroll_cost
-    _shop.cards = { }
-    _shop.boosters = { }
-    _shop.vouchers = { }
+    _shop.reroll_cost = safe_get(G, {'GAME', 'current_round', 'reroll_cost'})
+    _shop.free_rerolls = safe_get(G, {'GAME', 'current_round', 'free_rerolls'})
 
-    for i = 1, #G.shop_jokers.cards do
-        _shop.cards[i] = Utils.getCardData(G.shop_jokers.cards[i])
-    end
+    local shop_areas = {
+        {area = 'shop_jokers', key = 'jokers'},
+        {area = 'shop_booster', key = 'boosters'},
+        {area = 'shop_vouchers', key = 'vouchers'},
+        {area = 'shop_tarot', key = 'tarots'},
+        {area = 'shop_planet', key = 'planets'},
+        {area = 'shop_standard', key = 'playing_cards'}
+    }
 
-    for i = 1, #G.shop_booster.cards do
-        _shop.boosters[i] = Utils.getCardData(G.shop_booster.cards[i])
-    end
-
-    for i = 1, #G.shop_vouchers.cards do
-        _shop.vouchers[i] = Utils.getCardData(G.shop_vouchers.cards[i])
+    for _, v in ipairs(shop_areas) do
+        if G[v.area] and G[v.area].cards then
+            for i = 1, #G[v.area].cards do
+                _shop[v.key][i] = Utils.getCardData(G[v.area].cards[i])
+            end
+        end
     end
 
     return _shop
 end
 
 function Utils.getHandScoreData()
-    local _handscores = { }
-
+    local _handscores = {}
+    if G and G.GAME and G.GAME.hands then
+        for hand, data in pairs(G.GAME.hands) do
+            if data.visible then
+                _handscores[hand] = {
+                    level = data.level,
+                    chips = data.chips,
+                    mult = data.mult
+                }
+            end
+        end
+    end
     return _handscores
 end
 
 function Utils.getTagsData()
-    local _tags = { }
-
+    local _tags = {}
+    if G and G.GAME and G.GAME.tags then
+        for i = 1, #G.GAME.tags do
+            local tag = G.GAME.tags[i]
+            _tags[i] = {
+                key = tag.key,
+                name = tag.name,
+                config = tag.config
+            }
+        end
+    end
     return _tags
 end
 
 function Utils.getRoundData()
-    local _current_round = { }
+    local _current_round = {}
 
     if G and G.GAME and G.GAME.current_round then
         _current_round.discards_left = G.GAME.current_round.discards_left
         _current_round.hands_left = G.GAME.current_round.hands_left
+        _current_round.reroll_cost = G.GAME.current_round.reroll_cost
+        _current_round.free_rerolls = G.GAME.current_round.free_rerolls
+        _current_round.hands_played_this_round = G.GAME.current_round.hands_played
+        _current_round.discards_used_this_round = G.GAME.current_round.discards_used
+        _current_round.blind_on_deck = G.GAME.blind_on_deck
     end
 
     return _current_round
 end
 
 function Utils.getGameData()
-    local _game = { }
+    local _game = {}
 
-    if G and G.STATE then
+    if G and G.GAME then
         _game.state = G.STATE
-        _game.num_hands_played = G.GAME.hands_played
-        _game.num_skips = G.GAME.Skips
+        _game.hands_played = G.GAME.hands_played
+        _game.skips = G.GAME.skips
         _game.round = G.GAME.round
+        _game.ante = safe_get(G, {'GAME', 'round_resets', 'ante'})
         _game.discount_percent = G.GAME.discount_percent
         _game.interest_cap = G.GAME.interest_cap
+        _game.interest_amount = G.GAME.interest_amount
         _game.inflation = G.GAME.inflation
         _game.dollars = G.GAME.dollars
         _game.max_jokers = G.GAME.max_jokers
+        _game.max_consumables = safe_get(G, {'consumables', 'config', 'card_limit'})
         _game.bankrupt_at = G.GAME.bankrupt_at
-        _game.chips = _game.chips
+        _game.chips = G.GAME.chips
+        _game.win_streak = safe_get(G, {'PROFILES', G.SETTINGS.profile, 'high_scores', 'win_streak', 'amt'})
+        _game.current_streak = safe_get(G, {'PROFILES', G.SETTINGS.profile, 'high_scores', 'current_streak', 'amt'})
+        _game.stake = G.GAME.stake
     end
 
     return _game
 end
 
 function Utils.getGamestate()
+    if not G then return nil end
     local _gamestate = {}
 
     _gamestate.state = G.STATE
     _gamestate.waiting_for = G.waitingFor
     
-    -- Create a simplified version of G.GAME
-    -- keys: 'tarot_rate', 'challenge_tab', 'pack_size', 'round_bonus', 'tag_tally', 'win_ante', 'inflation', 'spectral_rate', 'banned_keys', 'joker_rate', 'used_vouchers', 'modifiers', 'pseudorandom', 'selected_back_key', 'shop', 'STOP_USE', 'round_resets', 'unused_discards', 'disabled_suits', 'ecto_minus', 'selected_back', 'playing_card_rate', 'voucher_text', 'starting_params', 'round_scores', 'edition_rate', 'used_jokers', 'previous_round', 'blind', 'current_round', 'rental_rate', 'consumeable_usage', 'last_blind', 'planet_rate', 'stake', 'perscribed_bosses', 'interest_cap', 'perishable_rounds', 'skips', 'subhash', 'facing_blind', 'orbital_choices', 'interest_amount', 'chips_text', 'blind_on_deck', 'hands_played', 'disabled_ranks', 'round', 'hand_usage', 'consumeable_buffer', 'max_jokers', 'tags', 'base_reroll_cost', 'sort', 'discount_percent', 'pool_flags', 'bankrupt_at', 'joker_usage', 'cards_played', 'chips', 'dollars', 'current_boss_streak', 'won', 'hands', 'probabilities', 'starting_deck_size', 'bosses_used', 'joker_buffer', 'seeded'
-    if G.GAME then
-        _gamestate.game = {
-            hands_played = G.GAME.hands_played,
-            Skips = G.GAME.Skips,
-            round = G.GAME.round,
-            dollars = G.GAME.dollars,
-            max_jokers = G.GAME.max_jokers,
-            bankrupt_at = G.GAME.bankrupt_at,
-            chips = G.GAME.chips,
-        }
-    end
-
-    -- Use existing utility functions to get data
+    _gamestate.game = Utils.getGameData()
+    _gamestate.round = Utils.getRoundData()
+    _gamestate.ante = Utils.getAnteData()
     _gamestate.hand = Utils.getHandData()
+    _gamestate.deck = Utils.getDeckData()
     _gamestate.jokers = Utils.getJokersData()
     _gamestate.consumables = Utils.getConsumablesData()
     _gamestate.shop = Utils.getShopData()
-    _gamestate.round = Utils.getRoundData()
+    _gamestate.hand_scores = Utils.getHandScoreData()
+    _gamestate.tags = Utils.getTagsData()
+    _gamestate.back = Utils.getBackData()
+
     return _gamestate
-end
-
-function Utils.getRoundData()
-    local _round = { }
-
-    if G and G.GAME and G.GAME.current_round then
-        _round.discards_left = G.GAME.current_round.discards_left
-        _round.hands_left = G.GAME.current_round.hands_left
-        _round.blind_on_deck = G.GAME.blind_on_deck
-        _round.reroll_cost = G.GAME.current_round.reroll_cost
-    end
-
-    return _round
 end
 
 function Utils.parseaction(data)
@@ -201,7 +341,7 @@ function Utils.parseaction(data)
             return nil
         end
 
-        local _actiontable = { }
+        local _actiontable = {}
         _actiontable[1] = _action
 
         if params then
@@ -246,7 +386,7 @@ end
 function Utils.isTableUnique(table)
     if table == nil then return true end
 
-    local _seen = { }
+    local _seen = {}
     for i = 1, #table do
         if _seen[table[i]] then return false end
         _seen[table[i]] = table[i]

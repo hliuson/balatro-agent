@@ -4,3 +4,5 @@ gamestate_cache
 wandb
 **.egg-info
 runs
+**.art
+**.claude

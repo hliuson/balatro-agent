@@ -1,1 +1,8 @@
 balatro
+**/.venv
+**.egg-info
+**/__pycache__
+**/build
+**cache**
+**.art
+**.claude

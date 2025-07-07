@@ -199,7 +199,7 @@ function BalatrobotAPI.init()
         card_eval_status_text = function(card, eval_type, amt, percent, dir, extra) end
     end
 
-    G.SETTINGS.GAMESPEED = 4.0
+    G.SETTINGS.GAMESPEED = 100
 
     -- One-time event to set waitingForAction to true after a delay
     G.E_MANAGER:add_event(Event({

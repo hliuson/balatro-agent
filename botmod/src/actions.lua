@@ -29,7 +29,6 @@ local function execute_use_card(card)
 end
 
 function Actions.done()
-    sendDebugMessage("Set actions.executing to false")
     Actions.executing = false
 end
 
@@ -40,35 +39,26 @@ local function safe_action(action_func)
     
     G.E_MANAGER:add_event(Event({
         trigger = 'immediate',
-        blocking = true,
+        blocking = false,
+        blockable = true,
         func = function()
             -- Essential safety checks from the botting guide
             if G.CONTROLLER.locked or not G.STATE_COMPLETE then
-                sendDebugMessage("G.CONTROLLER.locked or G.STATE_COMPLETE is false, waiting for game to be ready.")
                 return false -- Wait until the game is ready
             end
 
             -- Animation completion check
             for k, v in pairs(G.I.CARD) do
                 if v.T.x ~= v.VT.x or v.T.y ~= v.VT.y then
-                    sendDebugMessage("Card animations are still in progress, waiting for completion.")
                     return false -- Cards are still moving
                 end
             end
-
-            sendDebugMessage("All animations complete, proceeding with action.")
             -- Execute the core action logic
             local success = action_func()
             if success then
                 Actions.done()
             else
-                tries = tries + 1
-                if tries >= 5 then
-                    sendDebugMessage("Action failed after 5 attempts, giving up.")
-                    Actions.done()
-                    return true -- Stop retrying
-                end
-                safe_action(action_func) -- Requeue the action if not successful
+                return false -- Continue waiting for the next frame
             end
             return true --even if the action is not successful, we return true to yield position in queue
         end
@@ -216,12 +206,14 @@ end
 -- Action to leave the shop and start the next round
 function Actions.end_shop()
     safe_action(function()
-        local next_round_button = Actions.Buttons.next_round_button
-        if next_round_button and next_round_button.config and next_round_button.config.button then
-            G.FUNCS[next_round_button.config.button](next_round_button)
-            Actions.Buttons.next_round_button = nil -- Clear the button after use
-            return true -- Action complete
-        end
+        --local next_round_button = Actions.Buttons.next_round_button
+        --if next_round_button and next_round_button.config and next_round_button.config.button then
+        --    G.FUNCS[next_round_button.config.button](next_round_button)
+        --    Actions.Buttons.next_round_button = nil -- Clear the button after use
+        --    return true -- Action complete
+        --end
+        G.FUNCS.toggle_shop(nil) 
+        return true -- Action complete
     end)
 end
 
@@ -391,13 +383,24 @@ function Actions.pass()
 end
 
 function Actions.cash_out()
+    local stage = 1
     safe_action(function()
-        local cash_out_button = Actions.Buttons.cash_out_button
-        if cash_out_button and cash_out_button.config and cash_out_button.config.button then
-            G.FUNCS[cash_out_button.config.button](cash_out_button)
-            Actions.Buttons.cash_out_button = nil -- Clear the button after use
-            return true -- Action complete
+        if stage == 1 then
+            local cash_out_button = Actions.Buttons.cash_out_button
+            if cash_out_button and cash_out_button.config and cash_out_button.config.button then
+                G.FUNCS[cash_out_button.config.button](cash_out_button)
+                Actions.Buttons.cash_out_button = nil -- Clear the button after use
+                stage = 2
+                return false -- Action complete
+            end
+        elseif stage == 2 then
+            --wait for shop to be ready before calling done
+            if G.shop_jokers then
+                Actions.done()
+                return true -- Action complete
+            end
         end
+        
     end)
 end
 
@@ -412,9 +415,9 @@ G.CONTROLLER.snap_to = Hook.addcallback(G.CONTROLLER.snap_to, function(...)
         --    Middleware.c_select_blind()
         if _buttonfunc == 'cash_out' then
             Actions.Buttons.cash_out_button = _button
-        end
         elseif _buttonfunc == 'toggle_shop' and G.shop ~= nil then -- 'next_round_button'
             Actions.Buttons.next_round_button = _button
+        end
         
         --    firewhenready(function()
         --        return G.shop ~= nil and G.STATE_COMPLETE and G.STATE == G.STATES.SHOP
