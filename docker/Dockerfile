@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     fuse \
+    tmux \
+    imagemagick \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -37,7 +39,7 @@ RUN wget https://github.com/love2d/love/releases/download/11.5/love-11.5-x86_64.
 WORKDIR /tmp
 RUN wget https://github.com/ethangreen-dev/lovely-injector/releases/download/v0.8.0/lovely-x86_64-unknown-linux-gnu.tar.gz \
     && tar -xzf lovely-x86_64-unknown-linux-gnu.tar.gz \
-    && cp liblovely.so /app/balatro/lib/ \
+    && cp liblovely.so /app/balatro/ \
     && rm -rf /tmp/*
 
 # Copy Balatro game file

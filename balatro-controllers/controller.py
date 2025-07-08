@@ -230,6 +230,25 @@ class BalatroControllerBase:
 
     def start_balatro_instance(self):
         print("Starting Balatro instance...") if self.verbose else None
+        
+        # Start Xvfb if we're on Linux and DISPLAY is set to :99 (Docker container)
+        if platform.system() == "Linux" and os.getenv('DISPLAY') == ':99':
+            try:
+                # Check if Xvfb is already running
+                result = subprocess.run(['pgrep', '-f', 'Xvfb :99'], capture_output=True)
+                if result.returncode != 0:
+                    print("Starting Xvfb virtual display...") if self.verbose else None
+                    subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1024x768x24'], 
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(2)  # Give Xvfb time to start
+            except Exception as e:
+                print(f"Warning: Could not start Xvfb: {e}") if self.verbose else None
+        
+        if platform.system() == "Linux":
+            if not os.getenv('XDG_RUNTIME_DIR'):
+                os.environ['XDG_RUNTIME_DIR'] = '/tmp/runtime-root'
+                os.makedirs('/tmp/runtime-root', exist_ok=True)
+
         # Get Balatro executable path from environment variable
         balatro_exec_path = os.getenv('BALATRO_EXEC_PATH')
         
@@ -255,11 +274,17 @@ class BalatroControllerBase:
         
         # Build the command
         if platform.system() == "Linux" and balatro_exec_path == "/app/balatro/bin/Balatro.love":
-            # Love2D command format: love game.love port
-            cmd = ["/app/balatro/bin/love", balatro_exec_path, str(self.port)]
+            # Use Love2D directly with lovely preload for mod support
+            cmd = ["./bin/love", "./bin/Balatro.love", str(self.port)]
+            # Set working directory and environment for lovely
+            self.balatro_working_dir = "/app/balatro"
+            self.balatro_env = os.environ.copy()
+            self.balatro_env["LD_PRELOAD"] = "./liblovely.so"
         else:
             # Standard format: executable port
             cmd = [balatro_exec_path, str(self.port)]
+            self.balatro_working_dir = None
+            self.balatro_env = None
         
         # On Linux, check if we need to use xvfb for headless operation
         if platform.system() == "Linux":
@@ -279,7 +304,11 @@ class BalatroControllerBase:
         if self.verbose:
             print(f"Starting Balatro with command: {' '.join(cmd)}")
         
-        self.balatro_instance = subprocess.Popen(cmd)
+        self.balatro_instance = subprocess.Popen(
+            cmd, 
+            cwd=self.balatro_working_dir, 
+            env=self.balatro_env
+        )
         if self.verbose:
             print(f"Balatro instance started with PID: {self.balatro_instance.pid} on port {self.port}")
 
@@ -825,7 +854,6 @@ class BalatroControllerBase:
 
         try:
             status = self.get_status()
-
             if status == 'READY':
                 self.G = self.get_state()
 

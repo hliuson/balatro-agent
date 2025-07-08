@@ -86,18 +86,12 @@ function BalatrobotAPI.stablestate()
     if G.STATES ~= G.STATES.MENU and not G.STATE_COMPLETE then
         stable = false
     end
-    debug_str = string.format("Game stable: %s, Controller locked: %s, State: %s, State complete: %s, Action executing: %s",
-        tostring(stable), tostring(G.CONTROLLER.locked), G.STATE, tostring(G.STATE_COMPLETE), tostring(Actions.executing))
-    --sendDebugMessage(debug_str)
     return stable
 end
 
 function BalatrobotAPI.updatereadiness()
     -- Readiness requires both a stable game state AND the action execution flag to be false.
     local is_game_interactive = BalatrobotAPI.stablestate()
-
-    --debug_str = string.format("Game interactive: %s, Action executing: %s, Controller locked: %s, State: %s",
-    --    tostring(is_game_interactive), tostring(Actions.executing), tostring(G.CONTROLLER.locked), G.STATE)
 
     if is_game_interactive and not Actions.executing then
         if not BalatrobotAPI.waitingForAction then
@@ -110,11 +104,14 @@ end
 -- Main update loop for the API, handles receiving and processing commands.
 function BalatrobotAPI.update(dt)
     if not BalatrobotAPI.socket then
-        sendDebugMessage('new socket')
         BalatrobotAPI.socket = socket.udp()
         BalatrobotAPI.socket:settimeout(0)
-        local port = arg[1] or BALATRO_BOT_CONFIG.port
-        BalatrobotAPI.socket:setsockname('127.0.0.1', tonumber(port))
+        local port = arg[#arg] or BALATRO_BOT_CONFIG.port
+        local port_num = tonumber(port)
+        if not port_num then
+            port_num = tonumber(BALATRO_BOT_CONFIG.port)
+        end
+        BalatrobotAPI.socket:setsockname('127.0.0.1', port_num)
     end
 
     data, msg_or_ip, port_or_nil = BalatrobotAPI.socket:receivefrom()
@@ -200,15 +197,39 @@ function BalatrobotAPI.init()
     end
 
     G.SETTINGS.GAMESPEED = 100
+    G.SETTINGS.tutorial_complete = true
+    
+    -- Unlock all jokers and content
+    G.PROFILES[G.SETTINGS.profile].all_unlocked = true
+    for k, v in pairs(G.P_CENTERS) do
+      if not v.demo and not v.wip then 
+        v.alerted = true
+        v.discovered = true
+        v.unlocked = true
+      end
+    end
+    for k, v in pairs(G.P_BLINDS) do
+      if not v.demo and not v.wip then 
+        v.alerted = true
+        v.discovered = true
+        v.unlocked = true
+      end
+    end
+    for k, v in pairs(G.P_TAGS) do
+      if not v.demo and not v.wip then 
+        v.alerted = true
+        v.discovered = true
+        v.unlocked = true
+      end
+    end
 
-    -- One-time event to set waitingForAction to true after a delay
+    -- One-time event to set the initial state to complete
     G.E_MANAGER:add_event(Event({
-        trigger = 'after', delay = 3, blocking = false,
+        trigger = 'immediate', blocking = false,  blockable = false,
         func = function()
-            --if not BalatrobotAPI.waitingForAction then
-            --    sendDebugMessage("Initial load timeout reached. Forcing waitingForAction to true.")
-            --    BalatrobotAPI.waitingForAction = true
-            --end
+            if G.STATE == G.STATES.SPLASH then
+                return false
+            end
             G.STATE_COMPLETE = true
             return true
         end
