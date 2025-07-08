@@ -238,7 +238,12 @@ class BalatroControllerBase:
             if platform.system() == "Windows":
                 balatro_exec_path = r"C:\Program Files (x86)\Steam\steamapps\common\Balatro\Balatro.exe"
             elif platform.system() == "Linux":
-                balatro_exec_path = os.path.expanduser("~/.steam/steam/steamapps/common/Balatro/Balatro")
+                # Check if we're in the Docker container with Love2D setup
+                if os.path.exists("/app/balatro/bin/love") and os.path.exists("/app/balatro/bin/Balatro.love"):
+                    balatro_exec_path = "/app/balatro/bin/Balatro.love"
+                else:
+                    # Fallback to Steam installation
+                    balatro_exec_path = os.path.expanduser("~/.steam/steam/steamapps/common/Balatro/Balatro")
             elif platform.system() == "Darwin":  # macOS
                 balatro_exec_path = os.path.expanduser("~/Library/Application Support/Steam/steamapps/common/Balatro/Balatro.app/Contents/MacOS/Balatro")
             else:
@@ -249,7 +254,12 @@ class BalatroControllerBase:
             raise FileNotFoundError(f"Balatro executable not found at: {balatro_exec_path}")
         
         # Build the command
-        cmd = [balatro_exec_path, str(self.port)]
+        if platform.system() == "Linux" and balatro_exec_path == "/app/balatro/bin/Balatro.love":
+            # Love2D command format: love game.love port
+            cmd = ["/app/balatro/bin/love", balatro_exec_path, str(self.port)]
+        else:
+            # Standard format: executable port
+            cmd = [balatro_exec_path, str(self.port)]
         
         # On Linux, check if we need to use xvfb for headless operation
         if platform.system() == "Linux":
