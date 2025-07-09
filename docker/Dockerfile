@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     fuse \
     tmux \
     imagemagick \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -53,8 +54,12 @@ RUN git clone https://github.com/Steamodded/smods.git
 ENV DISPLAY=:99
 # Note: LD_PRELOAD is set in entrypoint script to avoid build-time issues
 
-# Create entrypoint script for development
+# Copy startup script
+COPY startup.sh /usr/local/bin/startup.sh
+RUN chmod +x /usr/local/bin/startup.sh
 
+# Set entrypoint
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/startup.sh"]
 
 # Default command
 CMD ["/bin/bash"]
