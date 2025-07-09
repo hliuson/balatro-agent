@@ -228,21 +228,41 @@ class BalatroControllerBase:
         data, _ = self.sock.recvfrom(65536)
         return json.loads(data)
 
+    def get_next_display(self):
+        """Find next available display number starting from 99"""
+        for display_num in range(99, 0, -1):
+            result = subprocess.run(['pgrep', '-f', f'Xvfb :{display_num}'], 
+                                  capture_output=True)
+            if result.returncode != 0:  # Display not in use
+                return display_num
+        raise RuntimeError("No available displays")
+
+    def start_virtual_display(self, display_num):
+        """Start Xvfb on specific display"""
+        subprocess.Popen(['Xvfb', f':{display_num}', '-screen', '0', '1024x768x24'],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+        return f':{display_num}'
+
+    def setup_display_for_linux(self):
+        """Set up display for Linux - always use virtual display for consistency"""
+        if platform.system() != "Linux":
+            return
+            
+        # Always use virtual display for headless operation
+        display_num = self.get_next_display()
+        display = self.start_virtual_display(display_num)
+        
+        # Set DISPLAY in our environment
+        if not hasattr(self, 'balatro_env') or self.balatro_env is None:
+            self.balatro_env = os.environ.copy()
+        self.balatro_env['DISPLAY'] = display
+        
+        if self.verbose:
+            print(f"Using virtual display: {display}")
+
     def start_balatro_instance(self):
         print("Starting Balatro instance...") if self.verbose else None
-        
-        # Start Xvfb if we're on Linux and DISPLAY is set to :99 (Docker container)
-        if platform.system() == "Linux" and os.getenv('DISPLAY') == ':99':
-            try:
-                # Check if Xvfb is already running
-                result = subprocess.run(['pgrep', '-f', 'Xvfb :99'], capture_output=True)
-                if result.returncode != 0:
-                    print("Starting Xvfb virtual display...") if self.verbose else None
-                    subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1024x768x24'], 
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    time.sleep(2)  # Give Xvfb time to start
-            except Exception as e:
-                print(f"Warning: Could not start Xvfb: {e}") if self.verbose else None
         
         if platform.system() == "Linux":
             if not os.getenv('XDG_RUNTIME_DIR'):
@@ -274,6 +294,7 @@ class BalatroControllerBase:
         
         # Build the command
         if platform.system() == "Linux" and balatro_exec_path == "/app/balatro/bin/Balatro.love":
+            print("Assuming Linux environment for Balatro execution...") if self.verbose else None
             # Use Love2D directly with lovely preload for mod support
             cmd = ["./bin/love", "./bin/Balatro.love", str(self.port)]
             # Set working directory and environment for lovely
@@ -286,20 +307,8 @@ class BalatroControllerBase:
             self.balatro_working_dir = None
             self.balatro_env = None
         
-        # On Linux, check if we need to use xvfb for headless operation
-        if platform.system() == "Linux":
-            # Check if DISPLAY is set, if not, use xvfb
-            if not os.getenv('DISPLAY'):
-                if self.verbose:
-                    print("No DISPLAY environment variable found. Using xvfb for headless operation.")
-                # Check if xvfb-run is available
-                try:
-                    subprocess.run(['which', 'xvfb-run'], check=True, capture_output=True)
-                    cmd = ['xvfb-run', '-a', '-s', '-screen 0 1024x768x24'] + cmd
-                except subprocess.CalledProcessError:
-                    print("Warning: xvfb-run not found. Install xvfb package for headless operation.")
-                    print("On Ubuntu/Debian: sudo apt-get install xvfb")
-                    print("On RHEL/CentOS: sudo yum install xorg-x11-server-Xvfb")
+        # Set up display for Linux (always use virtual display)
+        self.setup_display_for_linux()
         
         if self.verbose:
             print(f"Starting Balatro with command: {' '.join(cmd)}")

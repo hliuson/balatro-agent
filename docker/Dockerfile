@@ -54,6 +54,9 @@ RUN git clone https://github.com/Steamodded/smods.git
 ENV DISPLAY=:99
 # Note: LD_PRELOAD is set in entrypoint script to avoid build-time issues
 
+# Expose SSH port
+EXPOSE 22
+
 # Copy startup script
 COPY startup.sh /usr/local/bin/startup.sh
 RUN chmod +x /usr/local/bin/startup.sh
@@ -61,5 +64,6 @@ RUN chmod +x /usr/local/bin/startup.sh
 # Set entrypoint
 ENTRYPOINT ["/bin/bash", "/usr/local/bin/startup.sh"]
 
-# Default command
-CMD ["/bin/bash"]
+# Default command - keep container alive
+WORKDIR /app/balatro-agent
+CMD ["bash"]
