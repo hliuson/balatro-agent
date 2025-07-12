@@ -34,6 +34,7 @@ def format_game_state(state) -> str:
      - Shop: List of cards in shop, Vouchers, Boosters (if in SHOP state)
      - booster pack contents (if in any PACK state)
     """
+    print(state)
     if not isinstance(state, dict):
         raise ValueError("State must be a dictionary, got: {}".format(type(state)))
 
@@ -51,17 +52,45 @@ def format_game_state(state) -> str:
         value = value_map.get(value, value)  # Use the mapped value or original if not found
         suit = card.get('suit', '')
         name = f"{value} of {suit}" if value and suit else card.get('name', 'Unknown Card')
+        
+        # Add enhancement
         enhancement = card.get('ability_name', '')
-        if enhancement != "Default Base":
+        if enhancement and enhancement != "Default Base":
             name += f" ({enhancement})"
         if enhancement == "Stone Card":
             name = "Stone Card"
 
+        # Add seal
         seal = card.get('seal', 'none')
-        if seal != "none":
+        if seal and seal != "none":
             name += f" [{seal} Seal]"
+            
+        # Add edition
+        edition = card.get('edition', {})
+        if edition:
+            if edition.get('foil'):
+                name += " [Foil]"
+            if edition.get('holo'):
+                name += " [Holographic]"
+            if edition.get('polychrome'):
+                name += " [Polychrome]"
+            if edition.get('negative'):
+                name += " [Negative]"
+                
+        # Add stickers (eternal, perishable, rental)
+        if card.get('eternal'):
+            name += " [Eternal]"
+        if card.get('perishable'):
+            name += f" [Perishable {card.get('perish_tally', '?')}]"
+        if card.get('rental'):
+            name += " [Rental]"
+            
+        # Add description text if available
+        description = card.get('description_text', '')
+        if description:
+            name += f" - {description}"
 
-        return f"{value} of {suit}" if value and suit else "Unknown Card"
+        return name
 
     def format_cards(cards):
         if not cards:
@@ -73,12 +102,86 @@ def format_game_state(state) -> str:
     def format_jokers(jokers):
         if not jokers:
             return "None"
-        return ", ".join([f"{joker.get('name', 'Unknown Joker')} (Sell Value: {joker.get('cost', 0)})" for joker in jokers])
+        formatted_jokers = []
+        for joker in jokers:
+            name = joker.get('name', 'Unknown Joker')
+            sell_value = joker.get('cost', 0)
+            description = joker.get('description_text', '')
+            
+            # Add edition
+            edition = joker.get('edition', {})
+            if edition:
+                if edition.get('foil'):
+                    name += " [Foil]"
+                if edition.get('holo'):
+                    name += " [Holographic]"
+                if edition.get('polychrome'):
+                    name += " [Polychrome]"
+                if edition.get('negative'):
+                    name += " [Negative]"
+                    
+            # Add stickers (eternal, perishable, rental)
+            if joker.get('eternal'):
+                name += " [Eternal]"
+            if joker.get('perishable'):
+                name += f" [Perishable {joker.get('perish_tally', '?')}]"
+            if joker.get('rental'):
+                name += " [Rental]"
+            
+            if description:
+                formatted_jokers.append(f"{name} (Sell Value: {sell_value}) - {description}")
+            else:
+                formatted_jokers.append(f"{name} (Sell Value: {sell_value})")
+        
+        return ", ".join(formatted_jokers)
 
     def format_shop_cards(shop_cards):
         if not shop_cards:
             return "None"
-        return ", ".join([f"{card.get('name', 'Unknown Card')} (Cost: {card.get('cost', 0)})" for card in shop_cards])
+        formatted_cards = []
+        for card in shop_cards:
+            name = card.get('name', 'Unknown Card')
+            cost = card.get('cost', 0)
+            description = card.get('description_text', '')
+            
+            # Add enhancement for playing cards
+            enhancement = card.get('ability_name', '')
+            if enhancement and enhancement != "Default Base":
+                name += f" ({enhancement})"
+            if enhancement == "Stone Card":
+                name = "Stone Card"
+                
+            # Add seal
+            seal = card.get('seal', 'none')
+            if seal and seal != "none":
+                name += f" [{seal} Seal]"
+            
+            # Add edition
+            edition = card.get('edition', {})
+            if edition:
+                if edition.get('foil'):
+                    name += " [Foil]"
+                if edition.get('holo'):
+                    name += " [Holographic]"
+                if edition.get('polychrome'):
+                    name += " [Polychrome]"
+                if edition.get('negative'):
+                    name += " [Negative]"
+                    
+            # Add stickers (eternal, perishable, rental)
+            if card.get('eternal'):
+                name += " [Eternal]"
+            if card.get('perishable'):
+                name += f" [Perishable {card.get('perish_tally', '?')}]"
+            if card.get('rental'):
+                name += " [Rental]"
+            
+            if description:
+                formatted_cards.append(f"{name} (Cost: {cost}) - {description}")
+            else:
+                formatted_cards.append(f"{name} (Cost: {cost})")
+        
+        return ", ".join(formatted_cards)
 
     output = []
 
@@ -121,6 +224,14 @@ def format_game_state(state) -> str:
     if state.get("jokers"):
         output.append("\n== Jokers ==")
         output.append(format_jokers(state["jokers"]))
+
+    if state.get("consumables"):
+        output.append("\n== Consumables ==")
+        output.append(format_shop_cards(state["consumables"]))  # Reuse shop card formatting for consumables
+
+    if state.get("booster_pack"):
+        output.append("\n== Booster Pack ==")
+        output.append(format_shop_cards(state["booster_pack"]))  # Reuse shop card formatting for booster contents
 
     if state.get("shop") and state["state"] == State.SHOP.value:
         shop = state["shop"]
