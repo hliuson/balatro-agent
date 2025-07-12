@@ -19,7 +19,7 @@ class BalatroToolCaller:
     Converts Balatro actions to HuggingFace tool format and handles model interactions.
     """
     
-    def __init__(self, model_name: str = "Qwen/Qwen3-0.6B", device: str = "auto", verbose: bool = False):
+    def __init__(self, model_name: str = "Qwen/Qwen3-1.7B", device: str = "auto", verbose: bool = False):
         """
         Initialize the tool caller with a HuggingFace model.
         
@@ -45,14 +45,12 @@ class BalatroToolCaller:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             
         # System prompt for Balatro gameplay
-        self.system_prompt = """You are an expert Balatro player. The game consists of multiple Antes, each consisting of 3 rounds, where you must play cards to win chips. The final round is a boss fight, with special modifiers. Your goal is to reach the maximum ante possible. Success in balatro requires balancing value and tempo - you must find a good growth engine to scale your scoring potential, while also surviving in the early rounds.
-                
-        Each round, you must score a certain number of chips to win, or the game will end. You can play or discard cards from your hand. Playing cards can score chips, discarding cards lets you draw new cards from the deck. Your score is your CHIPS x MULT. Each poker hand you play has a certain number of chips and mult, with rarer hand having higher values. The hands are:
+        self.system_prompt = """You are playing Balatro. There is no user - you must end each message with a valid tool call corresponding to a balatro action. Each round, you can play or discard cards from your hand until you score enough chips to beat the round, or until you are out of hands, in which case you lose. Playing cards can score chips, discarding cards lets you draw new cards from the deck. Your score is your CHIPS x MULT. Each poker hand you play has a certain number of chips and mult, with rarer hand having higher values. The hands are:
          - High Card: 5 Chips x 1 Mult
          - Pair: 10 Chips x 2 Mult
          - Two Pair: 20 Chips x 2 Mult
          - Three of a Kind: 30 Chips x 3 Mult
-         - Straight: 30 Chips x 4 Mult
+         - Straight: 30 Chips x 4 Mult (Aces can be high or low)
          - Flush: 35 Chips x 4 Mult
          - Full House: 40 Chips x 4 Mult
          - Four of a Kind: 60 Chips x 7 Mult
@@ -60,8 +58,10 @@ class BalatroToolCaller:
          - Five of a Kind: 150 Chips x 12 Mult (Five cards of the same rank)
          - Flush House: 140 Chips x 14 Mult (Full House with Flush)
          - Flush Five: 200 Chips x 16 Mult (Five of a Kind with Flush)
+        
+        It is usually better to discard cards in hopes of making a good hand rather than playing a bad hand. You may play or discard between one and five cards from your hand.
 
-        After each round, you enter the shop phase. In the shop, you can buy cards, booster packs, or vouchers. Jokers are special cards which are permanently active and provide various special abilities."""
+        After each round, you enter the shop phase. In the shop, you can buy cards, booster packs, or vouchers. Jokers are special cards which cannot be played, but are permanently active and provide various special abilities."""
 
     def actions_to_tools(self, valid_actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -192,9 +192,9 @@ class BalatroToolCaller:
         Returns:
             Action list in format expected by balatro-controllers
         """
-        function_name = tool_call["function"]["name"].upper()
-        arguments = tool_call["function"].get("arguments", {})
-        
+        function_name = tool_call["name"].upper()
+        arguments = tool_call.get("arguments", {})
+
         # Convert function name back to Actions enum
         try:
             action_enum = Actions[function_name]
@@ -248,7 +248,7 @@ class BalatroToolCaller:
         # Prepare messages
         messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": f"Current game state:\n{formatted_state}\n\nWhat action should I take?"}
+            {"role": "user", "content": f"Current game state:\n{formatted_state}\n\nChoose your next action."}
         ]
         
         # Apply chat template with tools
@@ -272,11 +272,11 @@ class BalatroToolCaller:
             print(f"Model response: {response}")
 
         # Parse tool calls from response
-        tool_calls = self._extract_tool_calls(response)
-        
-        if tool_calls:
+        tool_call = self._extract_tool_calls(response)
+
+        if tool_call:
             # Convert first tool call to action
-            return self.tool_call_to_action(tool_calls[0])
+            return self.tool_call_to_action(tool_call)
         else:
             raise ValueError("No valid tool calls found in model response: " + response)
             #in the future we might want to handle this more gracefully, e.g. by falling back to a default action
@@ -291,21 +291,10 @@ class BalatroToolCaller:
         
         # find <tool_call>...</tool_call> tags in the response
         if "<tool_call>" not in response or "</tool_call>" not in response:
-            return tool_calls
-        tool_call_strs = response.split("<tool_call>")[1:]
-        for tool_call_str in tool_call_strs:
-            if "</tool_call>" not in tool_call_str:
-                continue
-            tool_call_json = tool_call_str.split("</tool_call>")[0].strip()
-            try:
-                tool_call = json.loads(tool_call_json)
-                if isinstance(tool_call, dict) and "function" in tool_call:
-                    tool_calls.append(tool_call)
-            except json.JSONDecodeError:
-                print(f"Failed to parse tool call: {tool_call_json}") if self.verbose else None
-        
-        return tool_calls
-
+            raise ValueError("No tool calls found in response: " + response)
+        tool_call_str = response.split("<tool_call>")[1]
+        tool_call_str = tool_call_str.split("</tool_call>")[0].strip()
+        return json.loads(tool_call_str)
 
 class BalatroGameRunner:
     """

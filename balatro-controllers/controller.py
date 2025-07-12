@@ -48,6 +48,7 @@ def format_game_state(state) -> str:
             '9': 'Nine', '10': 'Ten', 'Jack': 'Jack', 'Queen': 'Queen',
             'King': 'King'
         }
+        value = value_map.get(value, value)  # Use the mapped value or original if not found
         suit = card.get('suit', '')
         name = f"{value} of {suit}" if value and suit else card.get('name', 'Unknown Card')
         enhancement = card.get('ability_name', '')
@@ -81,6 +82,18 @@ def format_game_state(state) -> str:
 
     output = []
 
+    output.append("== Game State ==")
+    #json.dump(state, sys.stdout, indent=4)  # Print the raw state for debugging
+    game_state_enum = State(state['state'])
+    if game_state_enum not in EXPECTED_STATE_COMPONENTS:
+        raise ValueError(f"Unexpected game state: {game_state_enum}. Expected components: {EXPECTED_STATE_COMPONENTS[game_state_enum]}")
+    else:
+        if game_state_enum == State.SELECTING_HAND:
+            output.append("Current State: SELECTING_HAND. Play or discard cards.")
+        elif game_state_enum == State.SHOP:
+            output.append("Current State: SHOP. Buy cards, vouchers, or boosters. When done, use END_SHOP or REROLL_SHOP.")
+        else:
+            output.append(f"Current State: {game_state_enum.name}")
     if state.get("game"):
         game = state["game"]
         output.append("== Game Info ==")
@@ -94,6 +107,12 @@ def format_game_state(state) -> str:
         output.append("\n== Round Info ==")
         output.append(f"Chips: {round_info.get('chips', 0)}")
         output.append(f"Hands Left: {round_info.get('hands_left', 0)}, Discards Left: {round_info.get('discards_left', 0)}")
+    if state.get("ante"):
+        ante = state["ante"]
+        blinds = ante["blinds"]
+        currentblind = blinds["current"]
+        chips = currentblind["chips"]
+        output.append(f"Chips to pass this round: {chips}")
 
     if state.get("hand"):
         output.append("\n== Your Hand ==")
@@ -103,7 +122,7 @@ def format_game_state(state) -> str:
         output.append("\n== Jokers ==")
         output.append(format_jokers(state["jokers"]))
 
-    if state.get("shop"):
+    if state.get("shop") and state["state"] == State.SHOP.value:
         shop = state["shop"]
         output.append("\n== Shop ==")
         if shop.get("jokers"):
