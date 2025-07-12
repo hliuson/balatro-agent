@@ -35,12 +35,19 @@ def format_game_state(state) -> str:
      - booster pack contents (if in any PACK state)
     """
     if not isinstance(state, dict):
-        return f"Game State: {state}"
+        raise ValueError("State must be a dictionary, got: {}".format(type(state)))
 
     def format_card(card):
         if not card:
             return "None"
         value = card.get('value', '')
+        #map ace/face cards to self, map numbers i.e. '2' to "Two"
+        value_map = {
+            'Ace': 'Ace', '2': 'Two', '3': 'Three', '4': 'Four',
+            '5': 'Five', '6': 'Six', '7': 'Seven', '8': 'Eight',
+            '9': 'Nine', '10': 'Ten', 'Jack': 'Jack', 'Queen': 'Queen',
+            'King': 'King'
+        }
         suit = card.get('suit', '')
         name = f"{value} of {suit}" if value and suit else card.get('name', 'Unknown Card')
         enhancement = card.get('ability_name', '')
@@ -58,7 +65,9 @@ def format_game_state(state) -> str:
     def format_cards(cards):
         if not cards:
             return "None"
-        return ", ".join([format_card(card) for card in cards])
+        cards_formatted = [format_card(card) for card in cards]
+        # 1-indexed list
+        return ", ".join([f"{i+1}. {card}" for i, card in enumerate(cards_formatted)])
 
     def format_jokers(jokers):
         if not jokers:
@@ -103,7 +112,7 @@ def format_game_state(state) -> str:
             output.append(f"Vouchers: {shop['vouchers']}")
         if shop.get("boosters"):
             output.append(f"Boosters: {shop['boosters']}")
-    print(state)
+    
     return "\n".join(output)
 
 class State(Enum): # these enums are lifted from the game code so DO NOT CHANGE THEM
@@ -208,7 +217,6 @@ class BalatroControllerBase:
         if not data:
             raise ConnectionError("No response from Balatro instance.")
         data = json.loads(data)
-        print(f"Received data: {data}") if self.verbose else None
         response = data.get('response')
         if response:
             status = response.get('status')
@@ -476,13 +484,6 @@ class BalatroControllerBase:
             })
             valid_actions.append({
                 "action": Actions.SKIP_BOOSTER_PACK.name,
-                "params": []
-            })
-        
-        # Add PASS action for all interactive states
-        if current_state in self.policy_states:
-            valid_actions.append({
-                "action": Actions.PASS.name,
                 "params": []
             })
 
@@ -985,6 +986,13 @@ class BalatroControllerBase:
             print("Current game state:", format_game_state(game_state))
             print(f"Policy required for state: {State(game_state['state']).name}")
             print("Enter action (e.g., PLAY_HAND|1,2,3,4,5 or SKIP_BLIND, or PASS to let the game continue):")
+            print("Available actions:")
+            actions = self.get_valid_actions(game_state)
+            for action in actions:
+                action_name = action['action']
+                params = ", ".join([f"{p['name']} ({p['type']})" for p in action.get('params', [])])
+                print(f" - {action_name}: {params if params else 'No parameters required'}")
+            print("Type 'PASS' to let the game continue without an action, or 'QUIT' to exit CLI mode.")
             user_input = input("> ")
             
             if user_input.upper() == "PASS":
