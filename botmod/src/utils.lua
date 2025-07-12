@@ -12,6 +12,47 @@ function safe_get(t, keys)
     return current
 end
 
+-- Extract rendered description text from a card's UI data
+local function extract_card_description_text(card)
+    if not card or not card.ability_UIBox_table then
+        return nil
+    end
+    
+    local function extract_text_from_nodes(nodes)
+        local text_parts = {}
+        
+        for _, node in ipairs(nodes or {}) do
+            if node.n == G.UIT.T and node.config and node.config.text then
+                -- This is the rendered text with substituted parameters!
+                table.insert(text_parts, node.config.text)
+            elseif node.nodes then
+                -- Recursively search child nodes
+                local child_text = extract_text_from_nodes(node.nodes)
+                if child_text and child_text ~= "" then
+                    table.insert(text_parts, child_text)
+                end
+            end
+        end
+        
+        return table.concat(text_parts, " ")
+    end
+    
+    -- Check both main and info sections
+    local main_text = extract_text_from_nodes(card.ability_UIBox_table.main)
+    local info_text = extract_text_from_nodes(card.ability_UIBox_table.info)
+    
+    local full_text = ""
+    if main_text and main_text ~= "" then
+        full_text = main_text
+    end
+    if info_text and info_text ~= "" then
+        if full_text ~= "" then full_text = full_text .. " " end
+        full_text = full_text .. info_text
+    end
+    
+    return full_text ~= "" and full_text or nil
+end
+
 function Utils.getCardData(card)
     if not card then return nil end
     local _card = {}
@@ -71,6 +112,9 @@ function Utils.getCardData(card)
     end
     _card.rental = safe_get(card, { 'ability', 'rental' })
     _card.pinned = card.pinned
+
+    -- Extract rendered description text with substituted parameters
+    _card.description_text = extract_card_description_text(card)
 
     return _card
 end
