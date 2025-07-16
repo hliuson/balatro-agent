@@ -67,13 +67,12 @@ class BalatroActorModule(TensorDictModule):
     """
     
     def __init__(self, complete_policy):
-        self.complete_policy = complete_policy
-        
         super().__init__(
             module=complete_policy,
             in_keys=["observation"],
             out_keys=["logits", "action", "selected_cards", "action_log_prob", "card_log_prob"]
         )
+        self.complete_policy = complete_policy
     
     def forward(self, tensordict):
         # Use the complete policy's sampling method
@@ -87,13 +86,12 @@ class BalatroValueModule(TensorDictModule):
     """
     
     def __init__(self, complete_policy):
-        self.complete_policy = complete_policy
-        
         super().__init__(
             module=complete_policy,
             in_keys=["observation"],
             out_keys=["state_value"]
         )
+        self.complete_policy = complete_policy
     
     def forward(self, tensordict):
         # Get state value from complete policy

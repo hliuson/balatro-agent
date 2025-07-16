@@ -8,13 +8,8 @@ import torch
 from typing import Optional, Dict, Any
 from tensordict import TensorDict
 from torchrl.envs import EnvBase
-from torchrl.data import Composite, NonTensor, UnboundedContinuousTensorSpec
+import torchrl.data
 from torchrl.data.tensor_specs import DiscreteTensorSpec
-
-# Import our controller
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "balatro-controllers"))
 
 from controller import TrainingBalatroController, State, Actions, format_game_state
 
@@ -54,30 +49,22 @@ class BalatroEnv(EnvBase):
         self._episode_step = 0
         self._episode_reward = 0.0
         
-    def _make_spec(self):
         """Define the environment specifications."""
         # Observation spec: text string using NonTensor
-        self.observation_spec = Composite(
-            observation=NonTensor(shape=(1,), dtype=torch.object),
-            device=self.device
-        )
+        self.observation_spec = torchrl.data.NonTensor()
         
         # Action spec: discrete actions (21 possible actions)
-        self.action_spec = DiscreteTensorSpec(n=21, device=self.device)
+        self.action_spec = torchrl.data.Categorical(
+            n=len(Actions), 
+            device=self.device, 
+            dtype=torch.int64
+        )
         
         # Reward spec: scalar reward
-        self.reward_spec = UnboundedContinuousTensorSpec(shape=(1,), dtype=torch.float32, device=self.device)
-        
-        # Define full spec for reset/step
-        self.full_observation_spec = self.observation_spec.clone()
-        self.full_reward_spec = self.reward_spec.clone()
-        self.full_action_spec = self.action_spec.clone()
-        
-        # Add done and info specs
-        self.full_done_spec = Composite(
-            done=UnboundedContinuousTensorSpec(shape=(1,), dtype=torch.bool, device=self.device),
-            terminated=UnboundedContinuousTensorSpec(shape=(1,), dtype=torch.bool, device=self.device),
-            truncated=UnboundedContinuousTensorSpec(shape=(1,), dtype=torch.bool, device=self.device),
+        self.reward_spec = torchrl.data.Unbounded(
+            shape=(1, 1), 
+            device=self.device, 
+            dtype=torch.float32
         )
     
     def _reset(self, tensordict: TensorDict, **kwargs) -> TensorDict:
@@ -103,14 +90,16 @@ class BalatroEnv(EnvBase):
         
         # Format observation
         obs_text = format_game_state(self._current_state)
-        
+        valid_actions = self.controller.get_valid_actions(self._current_state)
         # Create output tensordict
         out = TensorDict(
             {
                 "observation": [obs_text],  # NonTensor expects a list
+                "valid_actions": valid_actions,  # Pass valid actions directly
                 "done": torch.tensor([False], dtype=torch.bool, device=self.device),
                 "terminated": torch.tensor([False], dtype=torch.bool, device=self.device),
                 "truncated": torch.tensor([False], dtype=torch.bool, device=self.device),
+                "is_init": torch.tensor([True], dtype=torch.bool, device=self.device),  # LSTM needs this
             },
             batch_size=self.batch_size,
             device=self.device
@@ -152,6 +141,7 @@ class BalatroEnv(EnvBase):
         
         # Find matching action spec
         action_spec = None
+        reward = 0.0
         for spec in valid_actions:
             if Actions[spec["action"]] == action_enum:
                 action_spec = spec
@@ -168,9 +158,10 @@ class BalatroEnv(EnvBase):
             next_state = self._current_state
         else:
             # Build complete action with parameters using existing logic
-            complete_action = self.controller._build_action_with_params(
-                action_enum, action_spec, self._current_state
-            )
+            if tensordict.get("selected_cards") is not None:
+                complete_action = [action_spec["action"], tensordict["selected_cards"]]
+            else:
+                complete_action = [action_spec["action"]]
             
             if self.verbose:
                 print(f"Complete action: {complete_action}")
@@ -211,15 +202,18 @@ class BalatroEnv(EnvBase):
         
         # Format next observation
         obs_text = format_game_state(next_state)
-        
+        valid_actions = self.controller.get_valid_actions(next_state)
         # Create output tensordict
         out = TensorDict(
             {
-                "observation": [obs_text],
-                "reward": torch.tensor([reward], dtype=torch.float32, device=self.device),
                 "done": torch.tensor([done], dtype=torch.bool, device=self.device),
                 "terminated": torch.tensor([terminated], dtype=torch.bool, device=self.device),
                 "truncated": torch.tensor([truncated], dtype=torch.bool, device=self.device),
+                "valid_actions": valid_actions,
+                "next": TensorDict({
+                    "reward": torch.tensor([reward], dtype=torch.float32, device=self.device),
+                    "observation": [obs_text],
+                }, batch_size=self.batch_size, device=self.device)
             },
             batch_size=self.batch_size,
             device=self.device
@@ -278,6 +272,7 @@ if __name__ == "__main__":
         print("Observation type:", type(reset_data["observation"]))
         print("Observation sample:", reset_data["observation"][0][:100] + "...")
         
+        print("Action spec:", env.action_spec)
         # Test random steps
         print("\n=== Testing Random Steps ===")
         for i in range(3):

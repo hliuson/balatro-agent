@@ -19,11 +19,6 @@ from text_encoder import make_text_encoder_module, ENCODER_DIM
 from lstm_module import make_lstm_module, HIDDEN_DIM
 from action_head import (make_action_head_module, make_value_head_module, make_combinatorial_card_selector, 
                         ActionHead, ValueHead, ACTION_DIM)
-
-# Import controller types for action mapping
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "balatro-controllers"))
 from controller import Actions
 
 
@@ -299,7 +294,17 @@ class CompleteBalatroPolicy(TensorDictModule):
         core_output = self.forward(tensordict)
         
         # Sample primary action
+        valid_actions = tensordict.get("valid_actions", None)
+        if valid_actions is None:
+            raise ValueError("Input tensordict must contain 'valid_actions' key with valid action indices.")
+        actions_mask = torch.zeros(ACTION_DIM, dtype=torch.bool, device=self._device)
+        for action in valid_actions:
+            actions_mask[Action(action["action"]).value] = True
+            
+
         action_logits = core_output["logits"]
+        action_logits = action_logits.masked_fill(~actions_mask, float('-inf'))
+        
         if deterministic:
             action = torch.argmax(action_logits, dim=-1)
             action_log_prob = F.log_softmax(action_logits, dim=-1)[action]

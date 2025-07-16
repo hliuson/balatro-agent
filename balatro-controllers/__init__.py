@@ -16,6 +16,7 @@ Functions:
 
 from .controller import (
     BalatroControllerBase,
+    TrainingBalatroController,
     State,
     Actions,
     format_game_state,
@@ -28,6 +29,7 @@ __author__ = "Harry Liuson"
 
 __all__ = [
     "BalatroControllerBase",
+    "TrainingBalatroController",
     "State", 
     "Actions",
     "format_game_state",
