@@ -525,7 +525,8 @@ class BalatroControllerBase:
                         "constraints": {
                             "min_length": 1,
                             "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1))
+                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
+                            "card_source": "hand"
                         }
                     }
                 ]
@@ -541,14 +542,119 @@ class BalatroControllerBase:
                         "constraints": {
                             "min_length": 1,
                             "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1))
+                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
+                            "card_source": "hand"
                         }
                     }
                 ]
             })
         elif current_state == State.SHOP:
-            # TODO: Implement validation for shop actions
-            pass
+            # END_SHOP action
+            valid_actions.append({
+                "action": Actions.END_SHOP.name,
+                "params": []
+            })
+            
+            # REROLL_SHOP action
+            valid_actions.append({
+                "action": Actions.REROLL_SHOP.name,
+                "params": []
+            })
+            
+            # BUY_CARD action (for buying jokers from shop)
+            shop_jokers = game_state.get('shop', {}).get('jokers', [])
+            if shop_jokers:
+                valid_actions.append({
+                    "action": Actions.BUY_CARD.name,
+                    "params": [
+                        {
+                            "name": "card_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_jokers),
+                                "card_source": "shop_jokers"
+                            }
+                        }
+                    ]
+                })
+            
+            # BUY_VOUCHER action
+            shop_vouchers = game_state.get('shop', {}).get('vouchers', [])
+            if shop_vouchers:
+                valid_actions.append({
+                    "action": Actions.BUY_VOUCHER.name,
+                    "params": [
+                        {
+                            "name": "voucher_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_vouchers),
+                                "card_source": "shop_vouchers"
+                            }
+                        }
+                    ]
+                })
+            
+            # BUY_BOOSTER action
+            shop_boosters = game_state.get('shop', {}).get('boosters', [])
+            if shop_boosters:
+                valid_actions.append({
+                    "action": Actions.BUY_BOOSTER.name,
+                    "params": [
+                        {
+                            "name": "booster_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_boosters),
+                                "card_source": "shop_boosters"
+                            }
+                        }
+                    ]
+                })
+            
+            # SELL_JOKER action
+            player_jokers = game_state.get('jokers', [])
+            if player_jokers:
+                valid_actions.append({
+                    "action": Actions.SELL_JOKER.name,
+                    "params": [
+                        {
+                            "name": "joker_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(player_jokers),
+                                "card_source": "jokers"
+                            }
+                        }
+                    ]
+                })
+            
+            # SELL_CONSUMABLE action
+            player_consumables = game_state.get('consumables', [])
+            if player_consumables:
+                valid_actions.append({
+                    "action": Actions.SELL_CONSUMABLE.name,
+                    "params": [
+                        {
+                            "name": "consumable_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(player_consumables),
+                                "card_source": "consumables"
+                            }
+                        }
+                    ]
+                })
         elif current_state == State.MENU:
             valid_actions.append({
                 "action": Actions.START_RUN.name,
@@ -597,7 +703,8 @@ class BalatroControllerBase:
                         "required": True,
                         "constraints": {
                             "min_value": 1,
-                            "max_value": len(game_state.get('booster_pack', []))
+                            "max_value": len(game_state.get('booster_pack', [])),
+                            "card_source": "booster_pack"
                         }
                     },
                     {
@@ -635,7 +742,8 @@ class BalatroControllerBase:
                         "constraints": {
                             "min_length": 1,
                             "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1))
+                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
+                            "card_source": "hand"
                         }
                     }
                 ]
@@ -651,14 +759,119 @@ class BalatroControllerBase:
                         "constraints": {
                             "min_length": 1,
                             "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1))
+                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
+                            "card_source": "hand"
                         }
                     }
                 ]
             })
         elif current_state == State.SHOP:
-            # TODO: Implement validation for shop actions
-            pass
+            # END_SHOP action
+            valid_actions.append({
+                "action": Actions.END_SHOP.name,
+                "params": []
+            })
+            
+            # REROLL_SHOP action
+            valid_actions.append({
+                "action": Actions.REROLL_SHOP.name,
+                "params": []
+            })
+            
+            # BUY_CARD action (for buying jokers from shop)
+            shop_jokers = game_state.get('shop', {}).get('jokers', [])
+            if shop_jokers:
+                valid_actions.append({
+                    "action": Actions.BUY_CARD.name,
+                    "params": [
+                        {
+                            "name": "card_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_jokers),
+                                "card_source": "shop_jokers"
+                            }
+                        }
+                    ]
+                })
+            
+            # BUY_VOUCHER action
+            shop_vouchers = game_state.get('shop', {}).get('vouchers', [])
+            if shop_vouchers:
+                valid_actions.append({
+                    "action": Actions.BUY_VOUCHER.name,
+                    "params": [
+                        {
+                            "name": "voucher_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_vouchers),
+                                "card_source": "shop_vouchers"
+                            }
+                        }
+                    ]
+                })
+            
+            # BUY_BOOSTER action
+            shop_boosters = game_state.get('shop', {}).get('boosters', [])
+            if shop_boosters:
+                valid_actions.append({
+                    "action": Actions.BUY_BOOSTER.name,
+                    "params": [
+                        {
+                            "name": "booster_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_boosters),
+                                "card_source": "shop_boosters"
+                            }
+                        }
+                    ]
+                })
+            
+            # SELL_JOKER action
+            player_jokers = game_state.get('jokers', [])
+            if player_jokers:
+                valid_actions.append({
+                    "action": Actions.SELL_JOKER.name,
+                    "params": [
+                        {
+                            "name": "joker_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(player_jokers),
+                                "card_source": "jokers"
+                            }
+                        }
+                    ]
+                })
+            
+            # SELL_CONSUMABLE action
+            player_consumables = game_state.get('consumables', [])
+            if player_consumables:
+                valid_actions.append({
+                    "action": Actions.SELL_CONSUMABLE.name,
+                    "params": [
+                        {
+                            "name": "consumable_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(player_consumables),
+                                "card_source": "consumables"
+                            }
+                        }
+                    ]
+                })
         elif current_state == State.MENU:
             valid_actions.append({
                 "action": Actions.START_RUN.name,
@@ -707,7 +920,8 @@ class BalatroControllerBase:
                         "required": True,
                         "constraints": {
                             "min_value": 1,
-                            "max_value": len(game_state.get('booster_pack', []))
+                            "max_value": len(game_state.get('booster_pack', [])),
+                            "card_source": "booster_pack"
                         }
                     },
                     {
@@ -752,7 +966,8 @@ class BalatroControllerBase:
                         "constraints": {
                             "min_length": 1,
                             "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1))
+                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
+                            "card_source": "hand"
                         }
                     }
                 ]
@@ -768,14 +983,119 @@ class BalatroControllerBase:
                         "constraints": {
                             "min_length": 1,
                             "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1))
+                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
+                            "card_source": "hand"
                         }
                     }
                 ]
             })
         elif current_state == State.SHOP:
-            # TODO: Implement validation for shop actions
-            pass
+            # END_SHOP action
+            valid_actions.append({
+                "action": Actions.END_SHOP.name,
+                "params": []
+            })
+            
+            # REROLL_SHOP action
+            valid_actions.append({
+                "action": Actions.REROLL_SHOP.name,
+                "params": []
+            })
+            
+            # BUY_CARD action (for buying jokers from shop)
+            shop_jokers = game_state.get('shop', {}).get('jokers', [])
+            if shop_jokers:
+                valid_actions.append({
+                    "action": Actions.BUY_CARD.name,
+                    "params": [
+                        {
+                            "name": "card_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_jokers),
+                                "card_source": "shop_jokers"
+                            }
+                        }
+                    ]
+                })
+            
+            # BUY_VOUCHER action
+            shop_vouchers = game_state.get('shop', {}).get('vouchers', [])
+            if shop_vouchers:
+                valid_actions.append({
+                    "action": Actions.BUY_VOUCHER.name,
+                    "params": [
+                        {
+                            "name": "voucher_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_vouchers),
+                                "card_source": "shop_vouchers"
+                            }
+                        }
+                    ]
+                })
+            
+            # BUY_BOOSTER action
+            shop_boosters = game_state.get('shop', {}).get('boosters', [])
+            if shop_boosters:
+                valid_actions.append({
+                    "action": Actions.BUY_BOOSTER.name,
+                    "params": [
+                        {
+                            "name": "booster_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_boosters),
+                                "card_source": "shop_boosters"
+                            }
+                        }
+                    ]
+                })
+            
+            # SELL_JOKER action
+            player_jokers = game_state.get('jokers', [])
+            if player_jokers:
+                valid_actions.append({
+                    "action": Actions.SELL_JOKER.name,
+                    "params": [
+                        {
+                            "name": "joker_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(player_jokers),
+                                "card_source": "jokers"
+                            }
+                        }
+                    ]
+                })
+            
+            # SELL_CONSUMABLE action
+            player_consumables = game_state.get('consumables', [])
+            if player_consumables:
+                valid_actions.append({
+                    "action": Actions.SELL_CONSUMABLE.name,
+                    "params": [
+                        {
+                            "name": "consumable_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(player_consumables),
+                                "card_source": "consumables"
+                            }
+                        }
+                    ]
+                })
         elif current_state == State.MENU:
             valid_actions.append({
                 "action": Actions.START_RUN.name,
@@ -824,7 +1144,8 @@ class BalatroControllerBase:
                         "required": True,
                         "constraints": {
                             "min_value": 1,
-                            "max_value": len(game_state.get('booster_pack', []))
+                            "max_value": len(game_state.get('booster_pack', [])),
+                            "card_source": "booster_pack"
                         }
                     },
                     {
@@ -869,7 +1190,8 @@ class BalatroControllerBase:
                         "constraints": {
                             "min_length": 1,
                             "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1))
+                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
+                            "card_source": "hand"
                         }
                     }
                 ]
@@ -885,14 +1207,119 @@ class BalatroControllerBase:
                         "constraints": {
                             "min_length": 1,
                             "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1))
+                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
+                            "card_source": "hand"
                         }
                     }
                 ]
             })
         elif current_state == State.SHOP:
-            # TODO: Implement validation for shop actions
-            pass
+            # END_SHOP action
+            valid_actions.append({
+                "action": Actions.END_SHOP.name,
+                "params": []
+            })
+            
+            # REROLL_SHOP action
+            valid_actions.append({
+                "action": Actions.REROLL_SHOP.name,
+                "params": []
+            })
+            
+            # BUY_CARD action (for buying jokers from shop)
+            shop_jokers = game_state.get('shop', {}).get('jokers', [])
+            if shop_jokers:
+                valid_actions.append({
+                    "action": Actions.BUY_CARD.name,
+                    "params": [
+                        {
+                            "name": "card_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_jokers),
+                                "card_source": "shop_jokers"
+                            }
+                        }
+                    ]
+                })
+            
+            # BUY_VOUCHER action
+            shop_vouchers = game_state.get('shop', {}).get('vouchers', [])
+            if shop_vouchers:
+                valid_actions.append({
+                    "action": Actions.BUY_VOUCHER.name,
+                    "params": [
+                        {
+                            "name": "voucher_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_vouchers),
+                                "card_source": "shop_vouchers"
+                            }
+                        }
+                    ]
+                })
+            
+            # BUY_BOOSTER action
+            shop_boosters = game_state.get('shop', {}).get('boosters', [])
+            if shop_boosters:
+                valid_actions.append({
+                    "action": Actions.BUY_BOOSTER.name,
+                    "params": [
+                        {
+                            "name": "booster_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(shop_boosters),
+                                "card_source": "shop_boosters"
+                            }
+                        }
+                    ]
+                })
+            
+            # SELL_JOKER action
+            player_jokers = game_state.get('jokers', [])
+            if player_jokers:
+                valid_actions.append({
+                    "action": Actions.SELL_JOKER.name,
+                    "params": [
+                        {
+                            "name": "joker_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(player_jokers),
+                                "card_source": "jokers"
+                            }
+                        }
+                    ]
+                })
+            
+            # SELL_CONSUMABLE action
+            player_consumables = game_state.get('consumables', [])
+            if player_consumables:
+                valid_actions.append({
+                    "action": Actions.SELL_CONSUMABLE.name,
+                    "params": [
+                        {
+                            "name": "consumable_index",
+                            "type": "int",
+                            "required": True,
+                            "constraints": {
+                                "min_value": 1,
+                                "max_value": len(player_consumables),
+                                "card_source": "consumables"
+                            }
+                        }
+                    ]
+                })
         elif current_state == State.MENU:
             valid_actions.append({
                 "action": Actions.START_RUN.name,
@@ -941,7 +1368,8 @@ class BalatroControllerBase:
                         "required": True,
                         "constraints": {
                             "min_value": 1,
-                            "max_value": len(game_state.get('booster_pack', []))
+                            "max_value": len(game_state.get('booster_pack', [])),
+                            "card_source": "booster_pack"
                         }
                     },
                     {
@@ -1182,6 +1610,55 @@ class BasicBalatroController(BalatroControllerBase):
 
     def handle_round_eval(self, state):
         return [Actions.CASH_OUT]
+
+
+class TrainingBalatroController(BalatroControllerBase):
+    def __init__(self, verbose=False):
+        # The policy is invoked for SELECTING_HAND, SHOP, and GAME_OVER states
+        super().__init__(verbose=verbose, policy_states=[State.SELECTING_HAND, State.SHOP, State.GAME_OVER])
+
+        # Define handlers for states that should be automated.
+        self.state_handlers[State.MENU] = self.handle_menu
+        self.state_handlers[State.BLIND_SELECT] = self.handle_blind_select
+        self.state_handlers[State.ROUND_EVAL] = self.handle_round_eval
+        
+        # Track episode state
+        self.episode_active = False
+        self.episode_reward = 0
+
+    def handle_menu(self, state):
+        """Starts a new run from the main menu."""
+        self.episode_active = True
+        self.episode_reward = 0
+        return [Actions.START_RUN, 1, "Red Deck", "H8J6D1U", None]
+
+    def handle_blind_select(self, state):
+        """Automatically selects the first available blind."""
+        return [Actions.SELECT_BLIND]
+
+    def handle_booster_pack(self, state):
+        """Skips any booster pack."""
+        return [Actions.SKIP_BOOSTER_PACK]
+
+    def handle_round_eval(self, state):
+        return [Actions.CASH_OUT]
+    
+    def is_episode_done(self, game_state):
+        """Check if the current episode is complete."""
+        return game_state.get('state') == State.GAME_OVER.value
+    
+    def get_episode_reward(self, game_state):
+        """Calculate the reward for the current episode."""
+        if self.is_episode_done(game_state):
+            # Reward is based on the ante (round) reached
+            ante = game_state.get('ante', 1)
+            return ante - 1  # ante 1 = 0 reward, ante 2 = 1 reward, etc.
+        return 0
+    
+    def reset_episode(self):
+        """Reset episode tracking state."""
+        self.episode_active = False
+        self.episode_reward = 0
 
 if __name__ == '__main__':
     env = BasicBalatroController(verbose=True)
