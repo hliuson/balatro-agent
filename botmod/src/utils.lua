@@ -15,67 +15,43 @@ end
 -- Extract rendered description text from a card's UI data
 local function extract_card_description_text(card)
     if not card then
-        sendDebugMessage("extract_card_description_text: card is nil")
         return nil
     end
     
     local card_name = (card.ability and card.ability.name) or (card.config and card.config.center and card.config.center.name) or "unknown"
-    sendDebugMessage("extract_card_description_text: Processing " .. card_name)
     
     -- Generate UI data if it doesn't exist
     if not card.ability_UIBox_table and card.generate_UIBox_ability_table then
-        sendDebugMessage("extract_card_description_text: Generating UIBox for " .. card_name)
         card.ability_UIBox_table = card:generate_UIBox_ability_table()
     end
     
     if not card.ability_UIBox_table then
-        sendDebugMessage("extract_card_description_text: No UIBox for " .. card_name)
         return nil
     end
-    
-    sendDebugMessage("extract_card_description_text: UIBox exists for " .. card_name)
-    
-    -- Debug: Check what's in the UIBox structure
-    if card.ability_UIBox_table.main then
-        sendDebugMessage("extract_card_description_text: main section exists with " .. #card.ability_UIBox_table.main .. " items")
-    else
-        sendDebugMessage("extract_card_description_text: main section is nil")
-    end
-    
-    if card.ability_UIBox_table.info then
-        sendDebugMessage("extract_card_description_text: info section exists with " .. #card.ability_UIBox_table.info .. " items")
-    else
-        sendDebugMessage("extract_card_description_text: info section is nil")
-    end
+
     
     local function extract_text_from_nodes(nodes)
         local text_parts = {}
         
         if not nodes then
-            sendDebugMessage("extract_text_from_nodes: nodes is nil")
             return ""
         end
-        
-        sendDebugMessage("extract_text_from_nodes: processing " .. #nodes .. " nodes")
+
         
         for i, node_line in ipairs(nodes) do
-            sendDebugMessage("extract_text_from_nodes: processing line " .. i .. " with " .. #node_line .. " items")
             
             -- Each node_line is an array of UI nodes
             for j, node in ipairs(node_line) do
-                sendDebugMessage("extract_text_from_nodes: line " .. i .. " node " .. j .. " type = " .. (node.n or "nil"))
                 
                 if node.n == G.UIT.O and node.config and node.config.object then
                     -- This is a DynaText object containing the rendered text
                     local dyna_text = node.config.object
                     if dyna_text and dyna_text.string then
                         local text_content = table.concat(dyna_text.string, "")
-                        sendDebugMessage("extract_text_from_nodes: found DynaText: " .. text_content)
                         table.insert(text_parts, text_content)
                     end
                 elseif node.n == G.UIT.T and node.config and node.config.text then
                     -- Fallback for simple text nodes
-                    sendDebugMessage("extract_text_from_nodes: found simple text: " .. node.config.text)
                     table.insert(text_parts, node.config.text)
                 elseif node.nodes then
                     -- Recursively search child nodes
@@ -94,8 +70,6 @@ local function extract_card_description_text(card)
     local main_text = extract_text_from_nodes(card.ability_UIBox_table.main)
     local info_text = extract_text_from_nodes(card.ability_UIBox_table.info)
     
-    sendDebugMessage("extract_card_description_text: " .. card_name .. " main_text = " .. (main_text or "nil"))
-    sendDebugMessage("extract_card_description_text: " .. card_name .. " info_text = " .. (info_text or "nil"))
     
     local full_text = ""
     if main_text and main_text ~= "" then
@@ -112,7 +86,6 @@ local function extract_card_description_text(card)
         full_text = full_text:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
     end
     
-    sendDebugMessage("extract_card_description_text: " .. card_name .. " final_text = " .. (full_text ~= "" and full_text or "empty"))
     
     return full_text ~= "" and full_text or nil
 end
@@ -180,7 +153,6 @@ function Utils.getCardData(card)
     -- Extract rendered description text with substituted parameters
     local extracted_text = extract_card_description_text(card)
     _card.description_text = extracted_text
-    sendDebugMessage("getCardData: description_text for " .. (_card.name or "unknown") .. " = " .. (extracted_text or "nil"))
     
     -- Debug: Check if we have UI data
     if card and card.ability_UIBox_table then

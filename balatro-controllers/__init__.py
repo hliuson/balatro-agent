@@ -22,6 +22,8 @@ from .controller import (
     format_game_state,
     get_available_port,
     is_port_available,
+    format_card,
+    format_cards
 )
 
 __version__ = "0.1.0"
@@ -33,6 +35,8 @@ __all__ = [
     "State", 
     "Actions",
     "format_game_state",
+    "format_card",
+    "format_cards",
     "get_available_port",
     "is_port_available",
 ]
