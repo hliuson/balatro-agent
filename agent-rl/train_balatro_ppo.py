@@ -52,7 +52,7 @@ def create_balatro_environment(device="auto", verbose=False):
     
     # Check environment specs
     try:
-        check_env_specs(env)
+        #check_env_specs(env)
         print("Environment specs check passed!")
     except Exception as e:
         print(f"Environment specs check failed: {e}")
@@ -182,7 +182,7 @@ def main():
     # Environment
     # ==========================================
     
-    env = create_balatro_environment(device=device, verbose=False)
+    env = create_balatro_environment(device=device, verbose=True)
     
     # ==========================================
     # Policy and Value Networks

@@ -6,13 +6,11 @@ This module provides a TorchRL environment wrapper around the TrainingBalatroCon
 
 import torch
 from typing import Optional, Dict, Any
-from tensordict import TensorDict
+from tensordict import TensorDict, NonTensorData
 from torchrl.envs import EnvBase
 import torchrl.data
-from torchrl.data.tensor_specs import DiscreteTensorSpec
-
-from controller import TrainingBalatroController, State, Actions, format_game_state
-
+from torchrl.data.tensor_specs import DiscreteTensorSpec, Composite
+from controller import TrainingBalatroController, State, Actions, format_game_state, format_cards
 
 class BalatroEnv(EnvBase):
     """
@@ -50,8 +48,11 @@ class BalatroEnv(EnvBase):
         self._episode_reward = 0.0
         
         """Define the environment specifications."""
-        # Observation spec: text string using NonTensor
-        self.observation_spec = torchrl.data.NonTensor()
+        # Observation spec: composite spec for both text and full gamestate
+        self.observation_spec = torchrl.data.Composite(
+            observation=torchrl.data.NonTensor(),
+            full_gamestate=torchrl.data.NonTensor()
+        )
         
         # Action spec: discrete actions (21 possible actions)
         self.action_spec = torchrl.data.Categorical(
@@ -91,15 +92,39 @@ class BalatroEnv(EnvBase):
         # Format observation
         obs_text = format_game_state(self._current_state)
         valid_actions = self.controller.get_valid_actions(self._current_state)
+        mask = torch.zeros(len(Actions), dtype=torch.bool, device=self.device)
+        for i in range(len(Actions)):
+            if Actions(i+1).name in [a["action"] for a in valid_actions]:
+                mask[i] = True
+            else:
+                mask[i] = False
+        
+        # Extract hand cards and compute embeddings directly
+        hand_cards = self._current_state.get("hand", [])
+        if hand_cards:
+            # Format hand cards for embedding
+            formatted_hand = [format_cards(card) for card in hand_cards]
+            # We'll compute embeddings later in the policy when needed
+            hand_card_data = hand_cards  # Store raw card data
+        else:
+            hand_card_data = []
+        # Store current state for policy access (not in TensorDict)
+        self._current_state_for_policy = self._current_state
+        
         # Create output tensordict
         out = TensorDict(
             {
-                "observation": [obs_text],  # NonTensor expects a list
-                "valid_actions": valid_actions,  # Pass valid actions directly
+                "observation": TensorDict({
+                    "observation": [obs_text],  # NonTensor expects a list
+                    "full_gamestate": NonTensorData(self._current_state),  # Wrap in NonTensorData
+                    "hand_card_data": NonTensorData(hand_card_data),  # Hand cards as NonTensorData
+                    "state_id": torch.tensor([id(self._current_state)], dtype=torch.int64, device=self.device),  # ID for reference
+                }, batch_size=self.batch_size, device=self.device),
+                "mask": mask,  # Pass valid actions directly
                 "done": torch.tensor([False], dtype=torch.bool, device=self.device),
-                "terminated": torch.tensor([False], dtype=torch.bool, device=self.device),
-                "truncated": torch.tensor([False], dtype=torch.bool, device=self.device),
+                "reward": torch.tensor([0.0], dtype=torch.float32, device=self.device),  # Initial reward
                 "is_init": torch.tensor([True], dtype=torch.bool, device=self.device),  # LSTM needs this
+                #"hand_formatted": format_cards(self._current_state.get("hand", [])),
             },
             batch_size=self.batch_size,
             device=self.device
@@ -121,15 +146,16 @@ class BalatroEnv(EnvBase):
         Returns:
             TensorDict with next observation, reward, done flags
         """
-        # Extract action
-        action_idx = tensordict["action"].item()
+        print(f"Step {self._episode_step + 1} in Balatro environment")
         
+        # Extract action
+        action_idx = tensordict["action"].item() + 1  # Convert to 1-indexed for Actions enum
         if self.verbose:
             print(f"Step {self._episode_step}: Action index {action_idx}")
         
         # Convert action index to Actions enum
         try:
-            action_enum = list(Actions)[action_idx]
+            action_enum = Actions(action_idx)
         except IndexError:
             raise ValueError(f"Invalid action index: {action_idx}. Must be 0-{len(Actions)-1}")
         
@@ -158,8 +184,9 @@ class BalatroEnv(EnvBase):
             next_state = self._current_state
         else:
             # Build complete action with parameters using existing logic
+            print(f"Selected Cards: {tensordict.get('selected_cards')}")
             if tensordict.get("selected_cards") is not None:
-                complete_action = [action_spec["action"], tensordict["selected_cards"]]
+                complete_action = [action_spec["action"], tensordict["selected_cards"].tolist()]
             else:
                 complete_action = [action_spec["action"]]
             
@@ -202,18 +229,27 @@ class BalatroEnv(EnvBase):
         
         # Format next observation
         obs_text = format_game_state(next_state)
+        print(f"Next observation: {obs_text}...")  # Print first 100 chars
         valid_actions = self.controller.get_valid_actions(next_state)
+        mask = tensordict.get("mask")
+        for i in range(len(Actions)):
+            if Actions(i+1).name in [a["action"] for a in valid_actions]:
+                mask[i] = True
+            else:
+                mask[i] = False
+
+        print("Result of wrapping in NonTensorData:", NonTensorData(next_state))
         # Create output tensordict
         out = TensorDict(
             {
-                "done": torch.tensor([done], dtype=torch.bool, device=self.device),
-                "terminated": torch.tensor([terminated], dtype=torch.bool, device=self.device),
-                "truncated": torch.tensor([truncated], dtype=torch.bool, device=self.device),
-                "valid_actions": valid_actions,
-                "next": TensorDict({
-                    "reward": torch.tensor([reward], dtype=torch.float32, device=self.device),
+                "observation": TensorDict({
                     "observation": [obs_text],
-                }, batch_size=self.batch_size, device=self.device)
+                    "full_gamestate": NonTensorData(next_state),  # Wrap in NonTensorData
+                }, batch_size=self.batch_size, device=self.device),
+                "mask": mask,
+                "done": torch.tensor([done], dtype=torch.bool, device=self.device),
+                "reward": torch.tensor([reward], dtype=torch.float32, device=self.device),
+                #"hand_formatted": format_cards(next_state.get("hand", [])),
             },
             batch_size=self.batch_size,
             device=self.device
@@ -270,7 +306,14 @@ if __name__ == "__main__":
         reset_data = env.reset()
         print("Reset data keys:", list(reset_data.keys()))
         print("Observation type:", type(reset_data["observation"]))
-        print("Observation sample:", reset_data["observation"][0][:100] + "...")
+        print("Observation keys:", list(reset_data["observation"].keys()))
+        print("Observation sample:", reset_data["observation"]["observation"][0][:100] + "...")
+        print("Full gamestate type:", type(reset_data["observation"]["full_gamestate"]))
+        
+        # Test accessing the actual data from NonTensorData
+        full_gamestate = reset_data["observation"]["full_gamestate"]
+        actual_data = full_gamestate.data if hasattr(full_gamestate, 'data') else full_gamestate
+        print("Actual gamestate data type:", type(actual_data))
         
         print("Action spec:", env.action_spec)
         # Test random steps

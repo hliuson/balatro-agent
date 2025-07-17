@@ -15,11 +15,11 @@ from tensordict.nn import TensorDictModule, TensorDictSequential
 from torch.distributions import Categorical
 
 # Import our components
-from text_encoder import make_text_encoder_module, ENCODER_DIM
+from text_encoder import make_text_encoder_module, ENCODER_DIM, CardEncoder
 from lstm_module import make_lstm_module, HIDDEN_DIM
 from action_head import (make_action_head_module, make_value_head_module, make_combinatorial_card_selector, 
                         ActionHead, ValueHead, ACTION_DIM)
-from controller import Actions
+from controller import Actions, format_card
 
 
 class STECardSelector(nn.Module):
@@ -182,7 +182,7 @@ class STECardSelector(nn.Module):
             
             # Continue LSTM
             lstm_out, (h_n, c_n) = self.base_selector.combinatorial_lstm(selected_embedding, (h_n, c_n))
-        
+        print(f"In STECardSelector.forward_with_ste: selected indices: {selected_indices}, total log prob: {total_log_prob.item()}")
         return selected_indices, total_log_prob
 
 
@@ -228,17 +228,31 @@ class CompleteBalatroPolicy(TensorDictModule):
         
         # Create custom action and value heads that expect "embeddings" (LSTM output key)
         from tensordict.nn import TensorDictModule as TDM
+        
+        # Action embedding layer - explicit action embeddings for STE
+        self.action_embedding_dim = ENCODER_DIM  # Same as card embeddings for compatibility
+        
+        
+        # Action head outputs continuous action vector (same dimension as action embeddings)
         action_net = ActionHead(input_size=HIDDEN_DIM, device=device)
-        action_head = TDM(action_net, in_keys=["embeddings"], out_keys=["logits"])
+        # Modify action head to output embeddings instead of logits
+        action_net.action_projection = nn.Linear(HIDDEN_DIM, self.action_embedding_dim, device=self._device)
+        action_head = TDM(action_net, in_keys=["embeddings"], out_keys=["action_vector"])
         
         value_net = ValueHead(input_size=HIDDEN_DIM, device=device) 
         value_head = TDM(value_net, in_keys=["embeddings"], out_keys=["state_value"])
         
+        # Context projection for combined LSTM + action embeddings
+        combined_context_dim = HIDDEN_DIM + self.action_embedding_dim  # 256 + 512 = 768
+        context_projection = nn.Linear(combined_context_dim, HIDDEN_DIM, device=self._device)
+        
         # Card selection components
         base_card_selector = make_combinatorial_card_selector(device=device)
         card_selector = STECardSelector(base_card_selector)
-        
-        # Core pipeline for action logits and values
+
+        card_encoder = CardEncoder(text_encoder.module)
+
+        # Core pipeline for action vector and values
         core_pipeline = TensorDictSequential(
             text_encoder,
             lstm,
@@ -251,7 +265,7 @@ class CompleteBalatroPolicy(TensorDictModule):
         super().__init__(
             module=core_pipeline,
             in_keys=["observation"],
-            out_keys=["logits", "state_value"]
+            out_keys=["action_vector", "state_value"]
         )
 
         self.lstm = lstm
@@ -260,6 +274,9 @@ class CompleteBalatroPolicy(TensorDictModule):
         self.value_head = value_head
         self.card_selector = card_selector
         self.core_pipeline = core_pipeline
+        self.card_encoder = card_encoder
+        self.action_embeddings = nn.Embedding(ACTION_DIM, self.action_embedding_dim, device=self._device)
+        self.context_projection = context_projection
         # Move to device
         self.to(self._device)
     
@@ -271,7 +288,7 @@ class CompleteBalatroPolicy(TensorDictModule):
             tensordict: Input with observation and card embeddings
             
         Returns:
-            TensorDict with action logits and state value
+            TensorDict with action vector and state value
         """
         return self.core_pipeline(tensordict)
     
@@ -293,44 +310,69 @@ class CompleteBalatroPolicy(TensorDictModule):
         # Get core outputs
         core_output = self.forward(tensordict)
         
-        # Sample primary action
-        valid_actions = tensordict.get("valid_actions", None)
-        if valid_actions is None:
-            raise ValueError("Input tensordict must contain 'valid_actions' key with valid action indices.")
-        actions_mask = torch.zeros(ACTION_DIM, dtype=torch.bool, device=self._device)
-        for action in valid_actions:
-            actions_mask[Action(action["action"]).value] = True
-            
+        # Sample primary action using STE with embeddings
+        mask = tensordict.get("mask")
+        print(f"Action mask: {mask}")
 
-        action_logits = core_output["logits"]
-        action_logits = action_logits.masked_fill(~actions_mask, float('-inf'))
+        # Get continuous action vector from policy head
+        action_vector = core_output["action_vector"]  # [batch_size, action_embedding_dim]
+        
+        # Compute similarities with all action embeddings 
+        action_similarities = torch.matmul(action_vector, self.action_embeddings.weight.T)  # [batch_size, num_actions]
+        action_logits = action_similarities  # These are our logits
+        action_logits = action_logits.masked_fill(~mask, float('-inf'))  # Apply action mask
         
         if deterministic:
             action = torch.argmax(action_logits, dim=-1)
             action_log_prob = F.log_softmax(action_logits, dim=-1)[action]
         else:
             action_dist = Categorical(logits=action_logits)
+            print(f"Action distribution: {action_dist.probs}")
             action = action_dist.sample()
             action_log_prob = action_dist.log_prob(action)
+
+        # Get quantized action embedding using STE
+        if self.training:
+            # Forward: discrete action embedding
+            discrete_action_embedding = self.action_embeddings(action)
+            # Backward: continuous action vector  
+            action_embedding_ste = discrete_action_embedding + (action_vector - action_vector.detach())
+        else:
+            # Inference: just use discrete embedding
+            action_embedding_ste = self.action_embeddings(action)
         
         # Initialize outputs
         selected_cards = []
         card_log_prob = torch.tensor(0.0, device=self._device)
         
-        # Conditional card selection
+        #from here on, switch to 1-indexed actions
+        action = action + 1  # Convert to 1-indexed action
+
+        # Conditional card selection using STE action embedding as context
         if action.item() in self.CARD_REQUIRING_ACTIONS:
             card_embeddings = self._get_card_embeddings_for_action(action.item(), tensordict)
-            
+
             if card_embeddings is not None and card_embeddings.size(0) > 0:
                 max_cards = self._get_max_cards_for_action(action.item())
                 
+                # Combine LSTM context with action embedding for full context
+                lstm_context = core_output["embeddings"]  # Full game state context
+                combined_context = torch.cat([lstm_context, action_embedding_ste], dim=-1)
+                projected_context = self.context_projection(combined_context)  # Project to expected size
+                
                 selected_cards, card_log_prob = self.card_selector.forward_with_ste(
-                    context_embeddings=core_output["embeddings"],  # LSTM outputs to "embeddings" key
+                    context_embeddings=projected_context,  # Full context + action embedding (projected)
                     card_embeddings=card_embeddings,
                     max_selections=max_cards,
                     temperature=self.temperature if not deterministic else 0.1,
                     training=self.training
                 )
+            else:
+                print(f"No card embeddings available for action {Actions(action.item()).name}")
+                selected_cards = []  # No cards selected if none available
+        else:
+            print(f"Action {Actions(action.item()).name} does not require card selection")
+            selected_cards = []
         
         # Package outputs
         output = core_output.clone()
@@ -339,7 +381,12 @@ class CompleteBalatroPolicy(TensorDictModule):
         output["action_log_prob"] = action_log_prob
         output["card_log_prob"] = card_log_prob
         output["total_log_prob"] = action_log_prob + card_log_prob
+        output["logits"] = action_logits  # Add logits for RL compatibility
         
+        print("In CompleteBalatroPolicy.sample_action_and_cards:")
+        print(f"Sampled action: {action.item()} ({Actions(action.item()).name})")
+        print(f"Selected cards: {selected_cards}")
+
         return output
     
     def _get_card_embeddings_for_action(self, action_idx: int, tensordict: TensorDict) -> Optional[torch.Tensor]:
@@ -354,11 +401,12 @@ class CompleteBalatroPolicy(TensorDictModule):
             Card embeddings tensor or None if not applicable
         """
         action_type = Actions(action_idx)
+        print(f"In _get_card_embeddings_for_action: action_type = {action_type}")
         
         if action_type == Actions.PLAY_HAND:
-            return tensordict.get("hand_card_embeddings")
+            return self._get_hand_card_embeddings(tensordict)
         elif action_type == Actions.DISCARD_HAND:
-            return tensordict.get("hand_card_embeddings")
+            return self._get_hand_card_embeddings(tensordict)
         elif action_type == Actions.BUY_CARD:
             return tensordict.get("shop_card_embeddings")
         elif action_type == Actions.SELL_JOKER:
@@ -371,6 +419,38 @@ class CompleteBalatroPolicy(TensorDictModule):
             return tensordict.get("consumable_embeddings")
         
         return None
+
+    def _get_hand_card_embeddings(self, tensordict: TensorDict) -> Optional[torch.Tensor]:
+        """
+        Get hand card embeddings from the tensordict.
+        
+        Args:
+            tensordict: Input tensordict
+            
+        Returns:
+            Hand card embeddings tensor or None if not available
+        """
+        # Get the full gamestate from the nested structure (wrapped in NonTensorData)
+        full_gamestate_wrapper = tensordict.get("observation", {}).get("full_gamestate")
+        print(f"In _get_hand_card_embeddings: full_gamestate_wrapper = {full_gamestate_wrapper}")
+        
+        if full_gamestate_wrapper is None:
+            return torch.empty(0, ENCODER_DIM, device=self._device)
+        
+        # Extract the actual gamestate dictionary from NonTensorData
+        full_gamestate = full_gamestate_wrapper.data if hasattr(full_gamestate_wrapper, 'data') else full_gamestate_wrapper
+        print(f"In _get_hand_card_embeddings: actual full_gamestate = {full_gamestate}")
+        
+        hand = full_gamestate.get("hand", []) if isinstance(full_gamestate, dict) else []
+        if hand is None or len(hand) == 0:
+            return torch.empty(0, ENCODER_DIM, device=self._device)
+        
+        formatted_hand = []
+        for card in hand:
+            formatted_hand.append(format_card(card))
+        embeddings = self.card_encoder(formatted_hand)
+        return embeddings
+    
     
     def _get_max_cards_for_action(self, action_idx: int) -> int:
         """
@@ -435,7 +515,8 @@ if __name__ == "__main__":
     
     # Create input tensordict
     input_td = TensorDict({
-        "observation": test_observation,
+        "observation": [test_observation],
+        "full_gamestate": [{}],  # Empty dict for testing
         "hand_card_embeddings": hand_cards,
         "shop_card_embeddings": shop_cards, 
         "joker_embeddings": jokers,

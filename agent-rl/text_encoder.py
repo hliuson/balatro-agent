@@ -12,6 +12,7 @@ from typing import Optional
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from controller import format_card
 
 # Model architecture constants
 ENCODER_DIM = 512
@@ -131,7 +132,7 @@ def make_text_encoder_module(
     # Wrap in TensorDictModule
     text_encoder_module = TensorDictModule(
         module=encoder_net,
-        in_keys=["observation"],
+        in_keys=[("observation", "observation")],
         out_keys=["embeddings"]
     )
     
@@ -171,30 +172,7 @@ class CardEncoder(nn.Module):
             return torch.empty(0, ENCODER_DIM, device=self.device)
         
         # Format cards as text descriptions
-        card_texts = []
-        for card in cards:
-            if card.get('name'):
-                # Use card name if available
-                card_text = card['name']
-            else:
-                # Build description from card properties
-                value = card.get('value', '')
-                suit = card.get('suit', '')
-                if value and suit:
-                    card_text = f"{value} of {suit}"
-                else:
-                    card_text = str(card)
-            
-            # Add additional card properties
-            enhancement = card.get('ability_name', '')
-            if enhancement and enhancement != "Default Base":
-                card_text += f" ({enhancement})"
-            
-            seal = card.get('seal', 'none')
-            if seal and seal != "none":
-                card_text += f" [{seal} Seal]"
-            
-            card_texts.append(card_text)
+        card_texts = [format_card(card) for card in cards]
         
         # Encode all cards using the text encoder
         card_embeddings = []
@@ -240,7 +218,10 @@ if __name__ == "__main__":
     
     # Create TensorDict input
     input_td = TensorDict({
-        "observation": test_observation
+        "observation": TensorDict({
+            "observation": [test_observation],
+            "full_gamestate": [{}]
+        }, batch_size=[])
     }, batch_size=[])
     
     # Test forward pass
