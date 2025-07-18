@@ -743,7 +743,20 @@ class BalatroControllerBase:
 
         raise NotImplementedError(f"No handler implemented for state {game_state_enum.name} and it was not escalated to policy.")
 
-    
+    def wait_ready_state(self):
+        while not self.connected:
+            try:
+                self.connect_socket()
+            except Exception as e:
+                return False
+        tries = 0
+        max_tries = 100
+        while tries < max_tries:
+            if self.get_status() == 'READY':
+                return True
+            time.sleep(0.1) # this is 0.1 seconds, so 10 times per second
+            tries += 1
+        raise ConnectionError("Balatro did not reach READY state after 10 seconds. Is it running?")
 
     def run_step(self):
         if not self.connected:
@@ -834,6 +847,7 @@ class BalatroControllerBase:
             escalate = self.run_step()
         return self.G # Return the game state that caused the loop to stop
     
+    
     def do_policy_action(self, action):
         """
         Perform a policy action on the Balatro instance.
@@ -910,7 +924,7 @@ class BalatroControllerBase:
                 self.do_policy_action(action)
             except (KeyError, ValueError, IndexError) as e:
                 print(f"Invalid input: {e}")
-                print("Please try again.")
+                print("Please try again.")        
 
 class BasicBalatroController(BalatroControllerBase):
     def __init__(self, verbose=False):
@@ -943,7 +957,6 @@ class BasicBalatroController(BalatroControllerBase):
     def handle_round_eval(self, state):
         return [Actions.CASH_OUT]
 
-
 class TrainingBalatroController(BalatroControllerBase):
     def __init__(self, verbose=False):
         # The policy is invoked for SELECTING_HAND, SHOP, and GAME_OVER states
@@ -955,13 +968,9 @@ class TrainingBalatroController(BalatroControllerBase):
         self.state_handlers[State.ROUND_EVAL] = self.handle_round_eval
         
         # Track episode state
-        self.episode_active = False
-        self.episode_reward = 0
 
     def handle_menu(self, state):
         """Starts a new run from the main menu."""
-        self.episode_active = True
-        self.episode_reward = 0
         return [Actions.START_RUN, 1, "Red Deck", "H8J6D1U", None]
 
     def handle_blind_select(self, state):
@@ -978,19 +987,11 @@ class TrainingBalatroController(BalatroControllerBase):
     def is_episode_done(self, game_state):
         """Check if the current episode is complete."""
         return game_state.get('state') == State.GAME_OVER.value
-    
-    def get_episode_reward(self, game_state):
-        """Calculate the reward for the current episode."""
-        if self.is_episode_done(game_state):
-            # Reward is based on the ante (round) reached
-            ante = game_state.get('ante', 1)
-            return ante - 1  # ante 1 = 0 reward, ante 2 = 1 reward, etc.
-        return 0
-    
-    def reset_episode(self):
-        """Reset episode tracking state."""
-        self.episode_active = False
-        self.episode_reward = 0
+  
+    def restart_run(self):
+        self.wait_ready_state()
+        self.sendcmd(self.actionToCmd(self.handle_menu(self.G)))
+        return self.run_until_policy()
 
 if __name__ == '__main__':
     env = BasicBalatroController(verbose=True)
