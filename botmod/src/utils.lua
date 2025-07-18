@@ -149,6 +149,10 @@ function Utils.getCardData(card)
     end
     _card.rental = safe_get(card, { 'ability', 'rental' })
     _card.pinned = card.pinned
+    
+    -- Add facing and debuff status
+    _card.facing = card.facing
+    _card.debuff = card.debuff
 
     -- Extract rendered description text with substituted parameters
     local extracted_text = extract_card_description_text(card)
@@ -188,6 +192,8 @@ function Utils.getHandData()
     if G and G.hand and G.hand.cards then
         for i = 1, #G.hand.cards do
             local _card = Utils.getCardData(G.hand.cards[i])
+            -- Add selection status
+            _card.highlighted = G.hand.cards[i].highlighted or false
             _hand[i] = _card
         end
     end

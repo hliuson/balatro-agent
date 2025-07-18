@@ -5,25 +5,27 @@ Bot = { }
 Bot.ACTIONS = {
     SELECT_BLIND = 1,
     SKIP_BLIND = 2,
-    PLAY_HAND = 3,
-    DISCARD_HAND = 4,
-    END_SHOP = 5,
-    REROLL_SHOP = 6,
-    BUY_CARD = 7,
-    BUY_VOUCHER = 8,
-    BUY_BOOSTER = 9,
-    SELECT_BOOSTER_CARD = 10,
-    SKIP_BOOSTER_PACK = 11,
-    SELL_JOKER = 12,
-    USE_CONSUMABLE = 13,
-    SELL_CONSUMABLE = 14,
-    REARRANGE_JOKERS = 15,
-    REARRANGE_CONSUMABLES = 16,
-    REARRANGE_HAND = 17,
-    PASS = 18,
-    START_RUN = 19,
-    RETURN_TO_MENU = 20,
-    CASH_OUT = 21
+    SELECT_HAND_CARD = 3,
+    CLEAR_HAND_SELECTION = 4,
+    PLAY_SELECTED = 5,
+    DISCARD_SELECTED = 6,
+    END_SHOP = 7,
+    REROLL_SHOP = 8,
+    BUY_CARD = 9,
+    BUY_VOUCHER = 10,
+    BUY_BOOSTER = 11,
+    SELECT_BOOSTER_CARD = 12,
+    SKIP_BOOSTER_PACK = 13,
+    SELL_JOKER = 14,
+    USE_CONSUMABLE = 15,
+    SELL_CONSUMABLE = 16,
+    REARRANGE_JOKERS = 17,
+    REARRANGE_CONSUMABLES = 18,
+    REARRANGE_HAND = 19,
+    PASS = 20,
+    START_RUN = 21,
+    RETURN_TO_MENU = 22,
+    CASH_OUT = 23
 }
 
 Bot.ACTIONPARAMS = { }
@@ -41,26 +43,50 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.SKIP_BLIND] = {
         return false
     end,
 }
-Bot.ACTIONPARAMS[Bot.ACTIONS.PLAY_HAND] = {
+Bot.ACTIONPARAMS[Bot.ACTIONS.SELECT_HAND_CARD] = {
     num_args = 2,
     isvalid = function(action)
-        if G and G.GAME and G.GAME.current_round and G.hand and G.hand.cards and
-            G.GAME.current_round.hands_left > 0 and #action == 2 and
-            Utils.isTableInRange(action[2], 1, #G.hand.cards) and
-            Utils.isTableUnique(action[2]) then
+        if G and G.hand and G.hand.cards and #action == 2 and
+            action[2] >= 1 and action[2] <= #G.hand.cards then
             return true
         end
         return false
     end,
 }
-Bot.ACTIONPARAMS[Bot.ACTIONS.DISCARD_HAND] = {
-    num_args = 2,
+Bot.ACTIONPARAMS[Bot.ACTIONS.CLEAR_HAND_SELECTION] = {
+    num_args = 1,
     isvalid = function(action)
-        if G and G.GAME and G.GAME.current_round and G.hand and G.hand.cards and
-            G.GAME.current_round.discards_left > 0 and #action == 2 and
-            Utils.isTableInRange(action[2], 1, #G.hand.cards) and
-            Utils.isTableUnique(action[2]) then
-            return true
+        return true
+    end,
+}
+Bot.ACTIONPARAMS[Bot.ACTIONS.PLAY_SELECTED] = {
+    num_args = 1,
+    isvalid = function(action)
+        if G and G.GAME and G.GAME.current_round and
+            G.GAME.current_round.hands_left > 0 and
+            G.hand and G.hand.cards then
+            -- Check if any cards are currently highlighted/selected
+            for i = 1, #G.hand.cards do
+                if G.hand.cards[i] and G.hand.cards[i].highlighted then
+                    return true
+                end
+            end
+        end
+        return false
+    end,
+}
+Bot.ACTIONPARAMS[Bot.ACTIONS.DISCARD_SELECTED] = {
+    num_args = 1,
+    isvalid = function(action)
+        if G and G.GAME and G.GAME.current_round and
+            G.GAME.current_round.discards_left > 0 and
+            G.hand and G.hand.cards then
+            -- Check if any cards are currently highlighted/selected
+            for i = 1, #G.hand.cards do
+                if G.hand.cards[i] and G.hand.cards[i].highlighted then
+                    return true
+                end
+            end
         end
         return false
     end,
@@ -117,7 +143,7 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.BUY_BOOSTER] = {
     end,
 }
 Bot.ACTIONPARAMS[Bot.ACTIONS.SELECT_BOOSTER_CARD] = {
-    num_args = 3,
+    num_args = 2,
     isvalid = function(action)
         if G and G.hand and G.pack_cards and
         G.hand.cards and G.pack_cards.cards and 
@@ -126,18 +152,18 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.SELECT_BOOSTER_CARD] = {
         G.STATE == G.STATES.SPECTRAL_PACK or
         G.STATE == G.STATES.STANDARD_PACK or
         G.STATE == G.STATES.BUFFOON_PACK) and
-        Utils.isTableInRange(action[2], 1, #G.hand.cards) and
-        Utils.isTableUnique(action[2]) and
-        Utils.isTableInRange(action[3], 1, #G.pack_cards.cards) and
-        Utils.isTableUnique(action[3]) --and
-        --Middleware.BUTTONS.SKIP_PACK ~= nil and
-        --Middleware.BUTTONS.SKIP_PACK.config.button == 'skip_booster'
-        then
-            if G.pack_cards.cards[action[2][1]].ability.consumeable and G.pack_cards.cards[action[2][1]].ability.consumeable.max_highlighted ~= nil and
-            #action[3] > 0 and #action[3] <= G.pack_cards.cards[action[2][1]].ability.consumeable.max_highlighted then
-                return true
-            else
-                return false
+        action[2] >= 1 and action[2] <= #G.pack_cards.cards then
+            local booster_card = G.pack_cards.cards[action[2]]
+            if booster_card and booster_card.ability and booster_card.ability.consumeable and
+            booster_card.ability.consumeable.max_highlighted then
+                -- Count currently selected hand cards
+                local selected_count = 0
+                for i = 1, #G.hand.cards do
+                    if G.hand.cards[i] and G.hand.cards[i].highlighted then
+                        selected_count = selected_count + 1
+                    end
+                end
+                return selected_count <= booster_card.ability.consumeable.max_highlighted
             end
             return true
         end
@@ -177,8 +203,25 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.SELL_JOKER] = {
 Bot.ACTIONPARAMS[Bot.ACTIONS.USE_CONSUMABLE] = {
     num_args = 2,
     isvalid = function(action)
-        -- TODO implement this
-        return true
+        if G and G.consumeables and G.consumeables.cards and
+            action[2] >= 1 and action[2] <= #G.consumeables.cards then
+            local consumable = G.consumeables.cards[action[2]]
+            if consumable and consumable.ability and consumable.ability.consumeable and
+            consumable.ability.consumeable.max_highlighted then
+                -- Count currently selected hand cards
+                local selected_count = 0
+                if G.hand and G.hand.cards then
+                    for i = 1, #G.hand.cards do
+                        if G.hand.cards[i] and G.hand.cards[i].highlighted then
+                            selected_count = selected_count + 1
+                        end
+                    end
+                end
+                return selected_count <= consumable.ability.consumeable.max_highlighted
+            end
+            return true
+        end
+        return false
     end,
 }
 Bot.ACTIONPARAMS[Bot.ACTIONS.SELL_CONSUMABLE] = {
