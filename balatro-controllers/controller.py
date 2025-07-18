@@ -820,7 +820,6 @@ class BalatroControllerBase:
             status = self.get_status()
             if status == 'READY':
                 self.G = self.get_state()
-
                 max_retries = 5
                 retries = 0
                 while retries < max_retries:

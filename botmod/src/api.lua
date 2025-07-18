@@ -11,6 +11,19 @@ BalatrobotAPI.socket = nil
 BalatrobotAPI.waitingForAction = false -- Initially, we are ready for an action: start the game
 BalatrobotAPI.action_no = 0
 
+-- State transition tracking to prevent premature ready state
+BalatrobotAPI.transition_lock = {
+    locked = false,
+    expected_state = nil,
+    lock_reason = nil
+}
+
+-- Shop initialization tracking
+BalatrobotAPI.shop_state = {
+    waiting_for_shop_init = false,
+    waiting_for_reroll = false
+}
+
 -- Table of states where the API client is expected to provide an action
 local INTERACTIVE_STATES = {
     [G.STATES.MENU] = true,
@@ -23,7 +36,8 @@ local INTERACTIVE_STATES = {
     [G.STATES.BUFFOON_PACK] = true,
     [G.STATES.PLANET_PACK] = true,
     [G.STATES.GAME_OVER] = true,
-    [G.STATES.NEW_ROUND] = true,
+    [G.STATES.ROUND_EVAL] = true,
+    [999] = true, -- I'm not sure what this is, but it seems to be a valid state in the game
 }
 
 
@@ -76,29 +90,153 @@ function BalatrobotAPI.respond(str)
     end
 end
 
+-- State transition lock management
+function BalatrobotAPI.setTransitionLock(expected_state, reason)
+    BalatrobotAPI.transition_lock.locked = true
+    BalatrobotAPI.transition_lock.expected_state = expected_state
+    BalatrobotAPI.transition_lock.lock_reason = reason
+    sendDebugMessage("Transition lock set: waiting for " .. tostring(expected_state) .. " (" .. tostring(reason) .. ")")
+end
+
+function BalatrobotAPI.clearTransitionLock()
+    if BalatrobotAPI.transition_lock.locked then
+        sendDebugMessage("Transition lock cleared: reached " .. tostring(G.STATE))
+        BalatrobotAPI.transition_lock.locked = false
+        BalatrobotAPI.transition_lock.expected_state = nil
+        BalatrobotAPI.transition_lock.lock_reason = nil
+    end
+end
+
+function BalatrobotAPI.checkTransitionLock()
+    if BalatrobotAPI.transition_lock.locked then
+        if G.STATE == BalatrobotAPI.transition_lock.expected_state then
+            BalatrobotAPI.clearTransitionLock()
+            return false -- Lock cleared, no longer locked
+        else
+            return true -- Still locked
+        end
+    end
+    return false -- Not locked
+end
+
+-- Shop initialization management
+function BalatrobotAPI.setShopInitWait()
+    BalatrobotAPI.shop_state.waiting_for_shop_init = true
+    sendDebugMessage("Cash out initiated - waiting for shop initialization")
+end
+
+function BalatrobotAPI.setRerollWait()
+    BalatrobotAPI.shop_state.waiting_for_reroll = true
+    sendDebugMessage("Reroll initiated - waiting for jokers to be ready")
+end
+
+function BalatrobotAPI.checkShopInitialization()
+    if G.STATE == G.STATES.SHOP then
+        -- Check for shop initialization (full shop areas)
+        if BalatrobotAPI.shop_state.waiting_for_shop_init then
+            local shop_ready = true
+            
+            -- Check if vouchers area exists
+            if not G.shop_vouchers then
+                shop_ready = false
+            end
+            
+            -- Check if jokers area exists and has cards
+            if not G.shop_jokers or not G.shop_jokers.cards or #G.shop_jokers.cards < 1 then
+                shop_ready = false
+            end
+            
+            -- Check if booster area exists
+            if not G.shop_booster or not G.shop_booster.cards or #G.shop_booster.cards < 1 then
+                shop_ready = false
+            end
+            
+            if shop_ready then
+                BalatrobotAPI.shop_state.waiting_for_shop_init = false
+                sendDebugMessage("Shop initialization complete")
+            else
+                return true -- Still waiting for shop init
+            end
+        end
+        
+        -- Check for reroll completion (just jokers need to be ready)
+        if BalatrobotAPI.shop_state.waiting_for_reroll then
+            if G.shop_jokers and G.shop_jokers.cards and #G.shop_jokers.cards >= 1 then
+                BalatrobotAPI.shop_state.waiting_for_reroll = false
+                sendDebugMessage("Reroll complete - jokers ready")
+            else
+                return true -- Still waiting for reroll
+            end
+        end
+    end
+    
+    return false -- Not waiting
+end
+
 function BalatrobotAPI.stablestate()
     -- Check if the game state is stable and not in a transition
     local stable = true
+    local instability_reasons = {}
+    
     if not G.CONTROLLER or G.CONTROLLER.locked then
         stable = false
+        table.insert(instability_reasons, "Controller locked or missing")
     end
     if not INTERACTIVE_STATES[G.STATE] then
         stable = false
+        table.insert(instability_reasons, "Not in interactive state (current: " .. tostring(G.STATE) .. ")")
     end
     if G.STATES ~= G.STATES.MENU and not G.STATE_COMPLETE then
         stable = false
+        table.insert(instability_reasons, "State not complete (current: " .. tostring(G.STATE) .. ")")
     end
+    
+    -- Check for transition lock - prevents ready state during problematic transitions
+    if BalatrobotAPI.checkTransitionLock() then
+        stable = false
+        table.insert(instability_reasons, "Transition lock active: " .. tostring(BalatrobotAPI.transition_lock.lock_reason))
+    end
+    
+    -- Check for shop initialization - prevents ready state until shop is fully loaded on first entry
+    if BalatrobotAPI.checkShopInitialization() then
+        stable = false
+        if BalatrobotAPI.shop_state.waiting_for_shop_init then
+            table.insert(instability_reasons, "Waiting for shop initialization")
+        end
+        if BalatrobotAPI.shop_state.waiting_for_reroll then
+            table.insert(instability_reasons, "Waiting for reroll completion")
+        end
+    end
+    
+    if not stable and #instability_reasons > 0 then
+        sendDebugMessage("API not stable: " .. table.concat(instability_reasons, ", "))
+    end
+    
     return stable
 end
 
 function BalatrobotAPI.updatereadiness()
     -- Readiness requires both a stable game state AND the action execution flag to be false.
     local is_game_interactive = BalatrobotAPI.stablestate()
+    local was_waiting = BalatrobotAPI.waitingForAction
 
     if is_game_interactive and not Actions.executing then
         if not BalatrobotAPI.waitingForAction then
             BalatrobotAPI.waitingForAction = true
             BalatrobotAPI.action_no = BalatrobotAPI.action_no + 1
+            sendDebugMessage("API now ready for action (action_no: " .. BalatrobotAPI.action_no .. ")")
+        end
+    else
+        if BalatrobotAPI.waitingForAction then
+            BalatrobotAPI.waitingForAction = false
+            local reasons = {}
+            if not is_game_interactive then
+                table.insert(reasons, "game not interactive")
+            end
+            if Actions.executing then
+                table.insert(reasons, "action executing")
+            end
+            sendDebugMessage("API no longer ready: " .. table.concat(reasons, ", "))
         end
     end
 end
@@ -122,17 +260,45 @@ function BalatrobotAPI.update(dt)
 
         if command == 'STATUS' then
             local status = BalatrobotAPI.waitingForAction and "READY" or "BUSY"
-            BalatrobotAPI.respond({ status = status})
+            local debug_info = {
+                status = status,
+                game_state = tostring(G.STATE),
+                state_complete = G.STATE_COMPLETE,
+                controller_locked = (G.CONTROLLER and G.CONTROLLER.locked) or false,
+                actions_executing = Actions.executing,
+                transition_locked = BalatrobotAPI.transition_lock.locked,
+                waiting_for_shop_init = BalatrobotAPI.shop_state.waiting_for_shop_init,
+                waiting_for_reroll = BalatrobotAPI.shop_state.waiting_for_reroll
+            }
+            sendDebugMessage("STATUS request - " .. status .. " (state: " .. tostring(G.STATE) .. ", actions_executing: " .. tostring(Actions.executing) .. ")")
+            BalatrobotAPI.respond(debug_info)
 
         elseif command == 'GET_STATE' then
             if BalatrobotAPI.waitingForAction then
                 BalatrobotAPI.notifyapiclient()
             else
+                local reasons = {}
+                if not BalatrobotAPI.stablestate() then
+                    table.insert(reasons, "game state not stable")
+                end
+                if Actions.executing then
+                    table.insert(reasons, "action currently executing")
+                end
+                sendDebugMessage("GET_STATE rejected - Bot is busy: " .. table.concat(reasons, ", "))
                 BalatrobotAPI.respond({ error = "Bot is busy" })
             end
         else
             if not BalatrobotAPI.waitingForAction then
-                BalatrobotAPI.respond({ error = "Bot is not ready for actions" })
+                local reasons = {}
+                if not BalatrobotAPI.stablestate() then
+                    table.insert(reasons, "game state not stable")
+                end
+                if Actions.executing then
+                    table.insert(reasons, "action currently executing")
+                end
+                local error_msg = "Bot is not ready for actions: " .. table.concat(reasons, ", ")
+                sendDebugMessage("Action rejected - " .. error_msg)
+                BalatrobotAPI.respond({ error = error_msg })
                 return
             end
 

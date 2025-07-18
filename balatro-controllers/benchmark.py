@@ -11,6 +11,13 @@ class BenchmarkController(BasicBalatroController):
         self.first_round = True
         self.bought_shop_card = False
         self.selected_cards = []  # Track selected cards
+        self.shop_visit_count = 0  # Track number of shop visits
+        self.second_shop_actions = 0  # Track actions in second shop
+        self.policy_states = [
+            State.SELECTING_HAND,
+            State.SHOP,
+            State.GAME_OVER
+        ]  # States we handle with our policy
         
     def reset_run(self):
         """Reset state for a new run."""
@@ -19,6 +26,8 @@ class BenchmarkController(BasicBalatroController):
         self.first_round = True
         self.bought_shop_card = False
         self.selected_cards = []
+        self.shop_visit_count = 0
+        self.second_shop_actions = 0
         
     def handle_menu(self, state):
         """Starts a new run with seed H8J6D1U."""
@@ -72,15 +81,56 @@ class BenchmarkController(BasicBalatroController):
         return [Actions.PASS]
     
     def handle_shop(self, state):
-        """Handle shop: buy second card on first visit, then skip."""
+        """Handle shop: first shop buy second card, second shop perform specific sequence."""
         self.step_count += 1
         
-        if not self.bought_shop_card:
-            shop_jokers = state.get('shop', {}).get('jokers', [])
-            if len(shop_jokers) >= 2:
-                self.bought_shop_card = True
-                return [Actions.BUY_CARD, 2]  # Buy second card
+        # First time entering any shop, increment visit count
+        if self.step_count == 1 or state.get('shop', {}).get('jokers', []):
+            if self.shop_visit_count == 0:
+                self.shop_visit_count = 1
+            elif self.shop_visit_count == 1 and self.second_shop_actions == 0:
+                self.shop_visit_count = 2
         
+        if self.shop_visit_count == 1:
+            # First shop: buy second card
+            if not self.bought_shop_card:
+                shop_jokers = state.get('shop', {}).get('jokers', [])
+                print(f"Shop state: {state.get('shop', {})}")
+                if len(shop_jokers) >= 2:
+                    self.bought_shop_card = True
+                    return [Actions.BUY_CARD, 2]  # Buy second card
+            return [Actions.END_SHOP]
+        
+        elif self.shop_visit_count == 2:
+            # Second shop: buy second pack, select first hand card, select first booster card, cash out
+            self.second_shop_actions += 1
+            
+            if self.second_shop_actions == 1:
+                # Buy the second pack
+                shop_packs = state.get('shop', {}).get('packs', [])
+                if len(shop_packs) >= 2:
+                    return [Actions.BUY_BOOSTER, 2]  # Buy second booster pack
+                return [Actions.END_SHOP]  # If no second pack, just exit
+            
+            elif self.second_shop_actions == 2:
+                # Select the first hand card
+                hand = state.get('hand', [])
+                if hand:
+                    return [Actions.SELECT_HAND_CARD, 1]
+                return [Actions.END_SHOP]
+            
+            elif self.second_shop_actions == 3:
+                # Select the first booster card
+                booster_cards = state.get('booster', [])
+                if booster_cards:
+                    return [Actions.SELECT_BOOSTER_CARD, 1]
+                return [Actions.END_SHOP]
+            
+            else:
+                # Cash out of the shop
+                return [Actions.END_SHOP]
+        
+        # Default: exit shop
         return [Actions.END_SHOP]
     
     def handle_game_over(self, state):
@@ -145,7 +195,7 @@ def run_benchmark(num_runs=5):
     print(f"Number of runs: {num_runs}")
     print()
     
-    controller = BenchmarkController(verbose=False)  # Less verbose for multiple runs
+    controller = BenchmarkController(verbose=True)  # Less verbose for multiple runs
     
     try:
         results = []

@@ -6,7 +6,7 @@ Actions.Buttons = {
 }
 -- Helper function to find and push the correct button on a card (buy, use, sell, etc.)
 local function execute_use_card(card)
-    if not card then return end
+    if not card then return false end
 
     local _use_button = card.children.use_button and card.children.use_button.definition
     if _use_button and _use_button.config and _use_button.config.button == nil then
@@ -25,7 +25,9 @@ local function execute_use_card(card)
 
     if button_to_push and button_to_push.config and button_to_push.config.button then
         G.FUNCS[button_to_push.config.button](button_to_push)
+        return true
     end
+    return false
 end
 
 function Actions.done()
@@ -35,24 +37,32 @@ end
 -- SAFE ACTION WRAPPER
 -- This function wraps all actions in a safe, condition-based event
 local function safe_action(action_func)
-    local tries = 0
+    local starttime = os.clock()
     
     G.E_MANAGER:add_event(Event({
         trigger = 'immediate',
         blocking = false,
         blockable = true,
         func = function()
+            -- check how long we have been trying to execute this action
+            if os.clock() - starttime > 5 then
+                sendDebugMessage("Action timed out after 5 seconds, yielding to allow other actions.")
+                Actions.done() -- Mark action as done to yield control
+                return true -- Yield to allow other actions to execute
+            end
+
+
             -- Essential safety checks from the botting guide
             if G.CONTROLLER.locked or not G.STATE_COMPLETE then
                 return false -- Wait until the game is ready
             end
 
             -- Animation completion check
-            for k, v in pairs(G.I.CARD) do
-                if v.T.x ~= v.VT.x or v.T.y ~= v.VT.y then
-                    return false -- Cards are still moving
+                for k, v in pairs(G.I.CARD) do
+                    if v.T.x ~= v.VT.x or v.T.y ~= v.VT.y then
+                        return false -- Cards are still moving
+                    end
                 end
-            end
             -- Execute the core action logic
             local success = action_func()
             if success then
@@ -133,6 +143,8 @@ function Actions.select_blind()
             if blind_obj then
                 local select_button = blind_obj:get_UIE_by_ID('select_blind_button')
                 if select_button and select_button.config and select_button.config.button then
+                    -- Set transition lock to prevent ready state until we reach SELECTING_HAND
+                    BalatrobotAPI.setTransitionLock(G.STATES.SELECTING_HAND, "select_blind")
                     G.FUNCS[select_button.config.button](select_button)
                     return true -- Action complete
                 end
@@ -167,8 +179,7 @@ function Actions.buy_card(card_index)
         if G.shop_jokers and G.shop_jokers.cards[card_index] then
             local card = G.shop_jokers.cards[card_index]
             card:click()
-            execute_use_card(card)
-            return true
+            return execute_use_card(card)
         end
         return false
     end)
@@ -180,7 +191,7 @@ function Actions.buy_voucher(voucher_index)
         if G.shop_vouchers and G.shop_vouchers.cards[voucher_index] then
             local card = G.shop_vouchers.cards[voucher_index]
             card:click()
-            execute_use_card(card)
+            return execute_use_card(card)
         end
         return false
     end)
@@ -192,7 +203,7 @@ function Actions.buy_booster(booster_index)
         if G.shop_booster and G.shop_booster.cards[booster_index] then
             local card = G.shop_booster.cards[booster_index]
             card:click()
-            execute_use_card(card)
+            return execute_use_card(card)
         end
         return false
     end)
@@ -206,7 +217,10 @@ function Actions.reroll_shop()
         end
         local reroll_button = UIBox:get_UIE_by_ID('reroll_button', G.buttons.UIRoot)
         if reroll_button and reroll_button.config and reroll_button.config.button then
-             G.FUNCS[reroll_button.config.button](reroll_button)
+            -- Set reroll wait flag to block until jokers are ready
+            BalatrobotAPI.setRerollWait()
+            G.FUNCS[reroll_button.config.button](reroll_button)
+            return true -- Action complete
         end
         return false
     end)
@@ -377,24 +391,17 @@ function Actions.pass()
 end
 
 function Actions.cash_out()
-    local stage = 1
+
     safe_action(function()
-        if stage == 1 then
-            local cash_out_button = Actions.Buttons.cash_out_button
-            if cash_out_button and cash_out_button.config and cash_out_button.config.button then
-                G.FUNCS[cash_out_button.config.button](cash_out_button)
-                Actions.Buttons.cash_out_button = nil -- Clear the button after use
-                stage = 2
-                return false -- Action complete
-            end
-        elseif stage == 2 then
-            --wait for shop to be ready before calling done
-            if G.shop_jokers then
-                Actions.done()
-                return true -- Action complete
-            end
+        BalatrobotAPI.setShopInitWait()
+        local cash_out_button = Actions.Buttons.cash_out_button
+        if cash_out_button and cash_out_button.config and cash_out_button.config.button then
+            -- Set shop init wait flag since we're transitioning to shop
+            G.FUNCS[cash_out_button.config.button](cash_out_button)
+            Actions.Buttons.cash_out_button = nil -- Clear the button after use
+            return true -- Action complete
         end
-        
+        return false
     end)
 end
 
