@@ -65,49 +65,58 @@ local function safe_action(action_func)
     }))
 end
 
--- Action to play selected cards from hand
-function Actions.play_hand(cards_to_play)
-    local step = 1
+-- Action to select/deselect a hand card
+function Actions.select_hand_card(card_index)
     safe_action(function()
-        if step == 1 then
-            if cards_to_play then
-                for i = 1, #cards_to_play do
-                    local card = G.hand.cards[cards_to_play[i]]
-                    if card then card:click() end
+        if G.hand and G.hand.cards and card_index >= 1 and card_index <= #G.hand.cards then
+            local card = G.hand.cards[card_index]
+            if card then
+                card:click()  -- Game handles selection state automatically
+            end
+            return true
+        end
+        return false
+    end)
+end
+
+-- Action to clear all hand card selections
+function Actions.clear_hand_selection()
+    safe_action(function()
+        if G.hand and G.hand.cards then
+            for i = 1, #G.hand.cards do
+                local card = G.hand.cards[i]
+                if card and card.highlighted then
+                    card:click() -- Deselect if currently selected
                 end
             end
-            step = 2
-            return false -- Continue to next step in the next frame
-        elseif step == 2 then
-            if not G.buttons or not G.buttons.UIRoot then
-                return false -- Wait for buttons to be ready
-            end
-            local play_button = UIBox:get_UIE_by_ID('play_button', G.buttons.UIRoot)
-            if play_button and play_button.config and play_button.config.button then
-                G.FUNCS[play_button.config.button](play_button)
-                return true -- Action complete
-            end
-            return false
         end
+        return true
+    end)
+end
+
+-- Action to play selected cards from hand
+function Actions.play_selected()
+    safe_action(function()
+        if not G.buttons or not G.buttons.UIRoot then
+            return false -- Wait for buttons to be ready
+        end
+        local play_button = UIBox:get_UIE_by_ID('play_button', G.buttons.UIRoot)
+        if play_button and play_button.config and play_button.config.button then
+            G.FUNCS[play_button.config.button](play_button)
+            return true -- Action complete
+        end
+        return false
     end)
 end
 
 -- Action to discard selected cards from hand
-function Actions.discard_hand(cards_to_discard)
-    local step = 1
+function Actions.discard_selected()
     safe_action(function()
-        if cards_to_discard and step == 1 then
-            for i = 1, #cards_to_discard do
-                local card = G.hand.cards[cards_to_discard[i]]
-                if card then card:click() end
-                step = 2 -- Move to next step after clicking cards
-            end
-        end
         if not G.buttons or not G.buttons.UIRoot then
             return false -- Wait for buttons to be ready
         end
         local discard_button = UIBox:get_UIE_by_ID('discard_button', G.buttons.UIRoot)
-        if discard_button and discard_button.config and discard_button.config.button and step == 2 then
+        if discard_button and discard_button.config and discard_button.config.button then
             G.FUNCS[discard_button.config.button](discard_button)
             return true -- Action complete
         end
@@ -230,15 +239,8 @@ function Actions.skip_booster_pack()
 end
 
 -- Action to select a card from a booster pack
-function Actions.select_booster_card(booster_card_index, hand_card_indices)
+function Actions.select_booster_card(booster_card_index)
     safe_action(function()
-        if hand_card_indices then
-            for i = 1, #hand_card_indices do
-                local card = G.hand.cards[hand_card_indices[i]]
-                if card then card:click() end
-            end
-        end
-
         if G.pack_cards and G.pack_cards.cards[booster_card_index] then
             local booster_card = G.pack_cards.cards[booster_card_index]
             booster_card:click()
@@ -267,23 +269,15 @@ function Actions.sell_joker(joker_indices)
 end
 
 -- Action to use a consumable card
-function Actions.use_consumable(consumable_indices, hand_card_indices)
+function Actions.use_consumable(consumable_index)
     safe_action(function()
-        if G.consumeables and G.consumeables.cards and consumable_indices then
-            if hand_card_indices then
-                for i = 1, #hand_card_indices do
-                    local card = G.hand.cards[hand_card_indices[i]]
-                    if card then card:click() end
-                end
+        if G.consumeables and G.consumeables.cards and consumable_index then
+            local card = G.consumeables.cards[consumable_index]
+            if card then
+                card:click()
+                execute_use_card(card)
+                return true
             end
-            for i = 1, #consumable_indices do
-                local card = G.consumeables.cards[consumable_indices[i]]
-                if card then
-                    card:click()
-                    execute_use_card(card)
-                end
-            end
-            return true
         end
         return false
     end)

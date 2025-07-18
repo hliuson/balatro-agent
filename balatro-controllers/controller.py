@@ -28,6 +28,18 @@ def format_card(card):
     """Format a single card for display."""
     if not card:
         return "None"
+    
+    # Check if card is face down - if so, hide all info except basic status
+    if card.get('facing') == 'back':
+        name = "Face Down Card"
+        # Add selection status for face down cards
+        if card.get('highlighted'):
+            name += " [SELECTED]"
+        return name
+    
+    # Check if card is debuffed
+    debuffed = card.get('debuff', False)
+    
     value = card.get('value', '')
     #map ace/face cards to self, map numbers i.e. '2' to "Two"
     value_map = {
@@ -39,6 +51,10 @@ def format_card(card):
     value = value_map.get(value, value)  # Use the mapped value or original if not found
     suit = card.get('suit', '')
     name = f"{value} of {suit}" if value and suit else card.get('name', 'Unknown Card')
+    
+    # Add debuff status early if present
+    if debuffed:
+        name += " [DEBUFFED]"
     
     # Add enhancement
     enhancement = card.get('ability_name', '')
@@ -72,6 +88,10 @@ def format_card(card):
     if card.get('rental'):
         name += " [Rental]"
         
+    # Add selection status for hand cards
+    if card.get('highlighted'):
+        name += " [SELECTED]"
+        
     # Add description text if available
     description = card.get('description_text', '')
     if description:
@@ -84,8 +104,8 @@ def format_cards(cards):
     if not cards:
         return "None"
     cards_formatted = [format_card(card) for card in cards]
-    # 1-indexed list
-    return ", ".join([f"{i+1}. {card}" for i, card in enumerate(cards_formatted)])
+    # 1-indexed list, one card per line
+    return "\n".join([f"{i+1}. {card}" for i, card in enumerate(cards_formatted)])
 
 
 def format_jokers(jokers):
@@ -281,25 +301,27 @@ EXPECTED_STATE_COMPONENTS = {
 class Actions(Enum): # these enums are from the lua mod. you can add new ones but it requires changes in the lua mod as well
     SELECT_BLIND = 1
     SKIP_BLIND = 2
-    PLAY_HAND = 3
-    DISCARD_HAND = 4
-    END_SHOP = 5
-    REROLL_SHOP = 6
-    BUY_CARD = 7
-    BUY_VOUCHER = 8
-    BUY_BOOSTER = 9
-    SELECT_BOOSTER_CARD = 10
-    SKIP_BOOSTER_PACK = 11
-    SELL_JOKER = 12
-    USE_CONSUMABLE = 13
-    SELL_CONSUMABLE = 14
-    REARRANGE_JOKERS = 15
-    REARRANGE_CONSUMABLES = 16
-    REARRANGE_HAND = 17
-    PASS = 18
-    START_RUN = 19
-    RETURN_TO_MENU = 20
-    CASH_OUT = 21
+    SELECT_HAND_CARD = 3
+    CLEAR_HAND_SELECTION = 4
+    PLAY_SELECTED = 5
+    DISCARD_SELECTED = 6
+    END_SHOP = 7
+    REROLL_SHOP = 8
+    BUY_CARD = 9
+    BUY_VOUCHER = 10
+    BUY_BOOSTER = 11
+    SELECT_BOOSTER_CARD = 12
+    SKIP_BOOSTER_PACK = 13
+    SELL_JOKER = 14
+    USE_CONSUMABLE = 15
+    SELL_CONSUMABLE = 16
+    REARRANGE_JOKERS = 17
+    REARRANGE_CONSUMABLES = 18
+    REARRANGE_HAND = 19
+    PASS = 20
+    START_RUN = 21
+    RETURN_TO_MENU = 22
+    CASH_OUT = 23
 
 
 class BalatroControllerBase:
@@ -345,7 +367,7 @@ class BalatroControllerBase:
                 data, _ = self.sock.recvfrom(65536)
                 break
             except socket.timeout:
-                time.sleep(0.1)
+                time.sleep(0.01)
         if not data:
             raise ConnectionError("No response from Balatro instance.")
         data = json.loads(data)
@@ -381,7 +403,7 @@ class BalatroControllerBase:
         """Start Xvfb on specific display"""
         subprocess.Popen(['Xvfb', f':{display_num}', '-screen', '0', '1024x768x24'],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)
+        time.sleep(0.5)
         return f':{display_num}'
 
     def setup_display_for_linux(self):
@@ -453,10 +475,16 @@ class BalatroControllerBase:
         if self.verbose:
             print(f"Starting Balatro with command: {' '.join(cmd)}")
         
+        # Suppress output when not verbose
+        stdout = None if self.verbose else subprocess.DEVNULL
+        stderr = None if self.verbose else subprocess.DEVNULL
+        
         self.balatro_instance = subprocess.Popen(
             cmd, 
             cwd=self.balatro_working_dir, 
-            env=self.balatro_env
+            env=self.balatro_env,
+            stdout=stdout,
+            stderr=stderr
         )
         if self.verbose:
             print(f"Balatro instance started with PID: {self.balatro_instance.pid} on port {self.port}")
@@ -477,7 +505,7 @@ class BalatroControllerBase:
                 self.connected = False # Ensure connected is False on failure
                 if self.verbose:
                     print(f"Attempt {attempt + 1}/{max_attempts} failed: {e}")
-                time.sleep(1)
+                time.sleep(0.1)
             attempt += 1
         
         raise Exception("Failed to connect to Balatro instance after multiple attempts")
@@ -516,39 +544,33 @@ class BalatroControllerBase:
         current_state = State(game_state['state'])
 
         if current_state == State.SELECTING_HAND:
-            # PLAY_HAND action
+            # Hand selection actions
             valid_actions.append({
-                "action": Actions.PLAY_HAND.name,
+                "action": Actions.SELECT_HAND_CARD.name,
                 "params": [
                     {
-                        "name": "cards_to_play",
-                        "type": "list",
+                        "name": "card_index",
+                        "type": "int",
                         "required": True,
                         "constraints": {
-                            "min_length": 1,
-                            "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
+                            "min_value": 1,
+                            "max_value": len(game_state.get('hand', [])),
                             "card_source": "hand"
                         }
                     }
                 ]
             })
-            # DISCARD_HAND action
             valid_actions.append({
-                "action": Actions.DISCARD_HAND.name,
-                "params": [
-                    {
-                        "name": "cards_to_discard",
-                        "type": "list",
-                        "required": True,
-                        "constraints": {
-                            "min_length": 1,
-                            "max_length": 5,
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1)),
-                            "card_source": "hand"
-                        }
-                    }
-                ]
+                "action": Actions.CLEAR_HAND_SELECTION.name,
+                "params": []
+            })
+            valid_actions.append({
+                "action": Actions.PLAY_SELECTED.name,
+                "params": []
+            })
+            valid_actions.append({
+                "action": Actions.DISCARD_SELECTED.name,
+                "params": []
             })
         elif current_state == State.SHOP:
             # END_SHOP action
@@ -695,7 +717,24 @@ class BalatroControllerBase:
                 "action": Actions.CASH_OUT.name,
                 "params": []
             })
-        elif current_state in [State.TAROT_PACK, State.PLANET_PACK, State.SPECTRAL_PACK, State.STANDARD_PACK, State.BUFFOON_PACK]:
+        elif current_state in [State.TAROT_PACK, State.SPECTRAL_PACK]:
+            # Select hand card to target
+            valid_actions.append({
+                "action": Actions.SELECT_HAND_CARD.name,
+                "params": [
+                    {
+                        "name": "card_index",
+                        "type": "int",
+                        "required": True,
+                        "constraints": {
+                            "min_value": 1,
+                            "max_value": len(game_state.get('hand', [])),
+                            "card_source": "hand"
+                        }
+                    }
+                ]
+            })
+            # Select booster card to use
             valid_actions.append({
                 "action": Actions.SELECT_BOOSTER_CARD.name,
                 "params": [
@@ -708,15 +747,27 @@ class BalatroControllerBase:
                             "max_value": len(game_state.get('booster_pack', [])),
                             "card_source": "booster_pack"
                         }
-                    },
+                    }
+                ]
+            })
+            # Skip the booster pack
+            valid_actions.append({
+                "action": Actions.SKIP_BOOSTER_PACK.name,
+                "params": []
+            })
+        elif current_state in [State.PLANET_PACK, State.STANDARD_PACK, State.BUFFOON_PACK]:
+            # These packs don't target hand cards
+            valid_actions.append({
+                "action": Actions.SELECT_BOOSTER_CARD.name,
+                "params": [
                     {
-                        "name": "hand_card_indices",
-                        "type": "list",
-                        "required": False,
+                        "name": "booster_card_index",
+                        "type": "int",
+                        "required": True,
                         "constraints": {
-                            "min_length": 0,
-                            "max_length": len(game_state.get('hand', [])),
-                            "allowed_values": list(range(1, len(game_state.get('hand', [])) + 1))
+                            "min_value": 1,
+                            "max_value": len(game_state.get('booster_pack', [])),
+                            "card_source": "booster_pack"
                         }
                     }
                 ]
@@ -790,7 +841,7 @@ class BalatroControllerBase:
                     if is_valid:
                         break
                     else:
-                        time.sleep(0.2) # wait a bit before retrying
+                        time.sleep(0.05) # wait a bit before retrying
                         self.G = self.get_state()
                         retries += 1
                 
@@ -820,12 +871,12 @@ class BalatroControllerBase:
                         print("run_step: No action returned by handler.")
                     pass
             else: # Status is BUSY
-                time.sleep(1) # Wait before checking status again
+                time.sleep(0.1) # Wait before checking status again
 
         except socket.timeout:
             raise ConnectionError("Socket timed out. Is Balatro running?")
         except (socket.error, ConnectionError) as e:
-            time.sleep(1) # Wait before trying to reconnect
+            time.sleep(0.1) # Wait before trying to reconnect
             self.connected = False # Mark as disconnected
             if self.sock:
                 self.sock.close()
@@ -853,7 +904,7 @@ class BalatroControllerBase:
         Perform a policy action on the Balatro instance.
         This method sends the action command to the Balatro instance and waits for the policy to be reached.
 
-        args: action (list): The action to perform (e.g., [Actions.PLAY_HAND, [1, 2, 3, 4, 5]]), including the action type and any necessary arguments.
+        args: action (list): The action to perform (e.g., [Actions.SELECT_HAND_CARD, 1] or [Actions.PLAY_SELECTED]), including the action type and any necessary arguments.
         """
         if not self.connected:
             raise ConnectionError("Not connected to Balatro instance.")
@@ -889,7 +940,7 @@ class BalatroControllerBase:
             # Policy state reached, prompt user for action
             print("Current game state:", format_game_state(game_state))
             print(f"Policy required for state: {State(game_state['state']).name}")
-            print("Enter action (e.g., PLAY_HAND|1,2,3,4,5 or SKIP_BLIND, or PASS to let the game continue):")
+            print("Enter action (e.g., SELECT_HAND_CARD|1 then PLAY_SELECTED, or SKIP_BLIND, or PASS to let the game continue):")
             print("Available actions:")
             actions = self.get_valid_actions(game_state)
             for action in actions:
@@ -913,9 +964,9 @@ class BalatroControllerBase:
                 action_enum = Actions[action_parts[0].upper()]
                 action_args = []
                 if len(action_parts) > 1:
-                    # Handle comma-separated list for card indices
-                    if action_enum == Actions.PLAY_HAND or action_enum == Actions.DISCARD_HAND:
-                        action_args.append([int(x) for x in action_parts[1].split(',')])
+                    # Handle single integer for hand card selection
+                    if action_enum == Actions.SELECT_HAND_CARD:
+                        action_args.append(int(action_parts[1]))
                     else:
                         action_args.append(action_parts[1]) # For other actions, treat as string
                 
