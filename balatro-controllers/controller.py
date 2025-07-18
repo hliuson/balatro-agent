@@ -367,7 +367,7 @@ class BalatroControllerBase:
                 data, _ = self.sock.recvfrom(65536)
                 break
             except socket.timeout:
-                time.sleep(0.1)
+                time.sleep(0.01)
         if not data:
             raise ConnectionError("No response from Balatro instance.")
         data = json.loads(data)
@@ -403,7 +403,7 @@ class BalatroControllerBase:
         """Start Xvfb on specific display"""
         subprocess.Popen(['Xvfb', f':{display_num}', '-screen', '0', '1024x768x24'],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)
+        time.sleep(0.5)
         return f':{display_num}'
 
     def setup_display_for_linux(self):
@@ -505,7 +505,7 @@ class BalatroControllerBase:
                 self.connected = False # Ensure connected is False on failure
                 if self.verbose:
                     print(f"Attempt {attempt + 1}/{max_attempts} failed: {e}")
-                time.sleep(1)
+                time.sleep(0.1)
             attempt += 1
         
         raise Exception("Failed to connect to Balatro instance after multiple attempts")
@@ -828,7 +828,7 @@ class BalatroControllerBase:
                     if is_valid:
                         break
                     else:
-                        time.sleep(0.2) # wait a bit before retrying
+                        time.sleep(0.05) # wait a bit before retrying
                         self.G = self.get_state()
                         retries += 1
                 
@@ -858,12 +858,12 @@ class BalatroControllerBase:
                         print("run_step: No action returned by handler.")
                     pass
             else: # Status is BUSY
-                time.sleep(1) # Wait before checking status again
+                time.sleep(0.1) # Wait before checking status again
 
         except socket.timeout:
             raise ConnectionError("Socket timed out. Is Balatro running?")
         except (socket.error, ConnectionError) as e:
-            time.sleep(1) # Wait before trying to reconnect
+            time.sleep(0.1) # Wait before trying to reconnect
             self.connected = False # Mark as disconnected
             if self.sock:
                 self.sock.close()

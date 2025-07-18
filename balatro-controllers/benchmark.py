@@ -145,7 +145,7 @@ def run_benchmark(num_runs=5):
     print(f"Number of runs: {num_runs}")
     print()
     
-    controller = BenchmarkController(verbose=True)  # Less verbose for multiple runs
+    controller = BenchmarkController(verbose=False)  # Less verbose for multiple runs
     
     try:
         results = []
