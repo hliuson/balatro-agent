@@ -47,7 +47,7 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.SELECT_HAND_CARD] = {
     num_args = 2,
     isvalid = function(action)
         if G and G.hand and G.hand.cards and #action == 2 and
-            action[2] >= 1 and action[2] <= #G.hand.cards then
+            type(action[2]) == "table" and action[2][1] >= 1 and action[2][1] <= #G.hand.cards then
             return true
         end
         return false
@@ -152,8 +152,8 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.SELECT_BOOSTER_CARD] = {
         G.STATE == G.STATES.SPECTRAL_PACK or
         G.STATE == G.STATES.STANDARD_PACK or
         G.STATE == G.STATES.BUFFOON_PACK) and
-        action[2] >= 1 and action[2] <= #G.pack_cards.cards then
-            local booster_card = G.pack_cards.cards[action[2]]
+        type(action[2]) == "table" and action[2][1] >= 1 and action[2][1] <= #G.pack_cards.cards then
+            local booster_card = G.pack_cards.cards[action[2][1]]
             if booster_card and booster_card.ability and booster_card.ability.consumeable and
             booster_card.ability.consumeable.max_highlighted then
                 -- Count currently selected hand cards
@@ -204,8 +204,8 @@ Bot.ACTIONPARAMS[Bot.ACTIONS.USE_CONSUMABLE] = {
     num_args = 2,
     isvalid = function(action)
         if G and G.consumeables and G.consumeables.cards and
-            action[2] >= 1 and action[2] <= #G.consumeables.cards then
-            local consumable = G.consumeables.cards[action[2]]
+            type(action[2]) == "table" and action[2][1] >= 1 and action[2][1] <= #G.consumeables.cards then
+            local consumable = G.consumeables.cards[action[2][1]]
             if consumable and consumable.ability and consumable.ability.consumeable and
             consumable.ability.consumeable.max_highlighted then
                 -- Count currently selected hand cards

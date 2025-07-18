@@ -475,10 +475,16 @@ class BalatroControllerBase:
         if self.verbose:
             print(f"Starting Balatro with command: {' '.join(cmd)}")
         
+        # Suppress output when not verbose
+        stdout = None if self.verbose else subprocess.DEVNULL
+        stderr = None if self.verbose else subprocess.DEVNULL
+        
         self.balatro_instance = subprocess.Popen(
             cmd, 
             cwd=self.balatro_working_dir, 
-            env=self.balatro_env
+            env=self.balatro_env,
+            stdout=stdout,
+            stderr=stderr
         )
         if self.verbose:
             print(f"Balatro instance started with PID: {self.balatro_instance.pid} on port {self.port}")
