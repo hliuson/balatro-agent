@@ -24,6 +24,13 @@ BalatrobotAPI.shop_state = {
     waiting_for_reroll = false
 }
 
+-- Pack state tracking
+BalatrobotAPI.pack_state = {
+    waiting_for_pack_state = false,
+    target_pack_state = nil,
+    waiting_for_hand_draw = false
+}
+
 -- Table of states where the API client is expected to provide an action
 local INTERACTIVE_STATES = {
     [G.STATES.MENU] = true,
@@ -130,6 +137,76 @@ function BalatrobotAPI.setRerollWait()
     sendDebugMessage("Reroll initiated - waiting for jokers to be ready")
 end
 
+-- Pack state management
+function BalatrobotAPI.setPackStateWait(target_state)
+    BalatrobotAPI.pack_state.waiting_for_pack_state = true
+    BalatrobotAPI.pack_state.target_pack_state = target_state
+    
+    -- Set hand draw wait for tarot and spectral packs
+    if target_state == G.STATES.TAROT_PACK or target_state == G.STATES.SPECTRAL_PACK then
+        BalatrobotAPI.pack_state.waiting_for_hand_draw = true
+        sendDebugMessage("Pack opened - waiting for state 999, setting to " .. tostring(target_state) .. ", then waiting for hand cards")
+    else
+        sendDebugMessage("Pack opened - waiting for state 999 then setting to " .. tostring(target_state))
+    end
+end
+
+function BalatrobotAPI.checkPackStateTransition()
+    if BalatrobotAPI.pack_state.waiting_for_pack_state then
+        if G.STATE == 999 then
+            -- We've reached state 999, now set the target pack state
+            G.STATE = BalatrobotAPI.pack_state.target_pack_state
+            BalatrobotAPI.pack_state.waiting_for_pack_state = false
+            BalatrobotAPI.pack_state.target_pack_state = nil
+            sendDebugMessage("Pack state transition complete - set to " .. tostring(G.STATE))
+            return false -- No longer waiting
+        else
+            return true -- Still waiting for state 999
+        end
+    end
+    return false -- Not waiting
+end
+
+function BalatrobotAPI.checkPackCardsReady()
+    -- Check if we're in a pack state and pack cards are ready for interaction
+    local pack_states = {
+        [G.STATES.TAROT_PACK] = true,
+        [G.STATES.PLANET_PACK] = true,
+        [G.STATES.SPECTRAL_PACK] = true,
+        [G.STATES.STANDARD_PACK] = true,
+        [G.STATES.BUFFOON_PACK] = true
+    }
+    
+    if pack_states[G.STATE] then
+        -- Check if pack_cards area exists
+        if not G.pack_cards then
+            return false -- Pack cards area not created yet
+        end
+        
+        -- Check if pack_cards has the expected number of cards
+        if not G.pack_cards.cards or #G.pack_cards.cards < (G.GAME.pack_size or 1) then
+            return false -- Not enough cards loaded yet
+        end
+        return true -- Pack cards are ready
+    end
+    
+    return true -- Not in a pack state, so no pack cards to check
+end
+
+function BalatrobotAPI.checkHandDrawComplete()
+    -- Check if hand cards are ready after using tarot/spectral cards
+    if BalatrobotAPI.pack_state.waiting_for_hand_draw then
+        if G.hand and G.hand.cards and #G.hand.cards > 0 then
+            BalatrobotAPI.pack_state.waiting_for_hand_draw = false
+            sendDebugMessage("Hand draw complete - hand has " .. #G.hand.cards .. " cards")
+            return false -- No longer waiting
+        else
+            return true -- Still waiting for hand cards
+        end
+    end
+    return false -- Not waiting for hand draw
+end
+
 function BalatrobotAPI.checkShopInitialization()
     if G.STATE == G.STATES.SHOP then
         -- Check for shop initialization (full shop areas)
@@ -208,6 +285,24 @@ function BalatrobotAPI.stablestate()
         end
     end
     
+    -- Check for pack state transition - prevents ready state until pack state is properly set
+    if BalatrobotAPI.checkPackStateTransition() then
+        stable = false
+        table.insert(instability_reasons, "Waiting for pack state transition (999 -> " .. tostring(BalatrobotAPI.pack_state.target_pack_state) .. ")")
+    end
+    
+    -- Check for pack cards readiness - prevents ready state until pack cards are fully loaded
+    if not BalatrobotAPI.checkPackCardsReady() then
+        stable = false
+        table.insert(instability_reasons, "Waiting for pack cards to be ready")
+    end
+    
+    -- Check for hand draw completion - prevents ready state until hand cards are drawn after tarot/spectral
+    if BalatrobotAPI.checkHandDrawComplete() then
+        stable = false
+        table.insert(instability_reasons, "Waiting for hand cards to be drawn")
+    end
+    
     if not stable and #instability_reasons > 0 then
         sendDebugMessage("API not stable: " .. table.concat(instability_reasons, ", "))
     end
@@ -268,7 +363,10 @@ function BalatrobotAPI.update(dt)
                 actions_executing = Actions.executing,
                 transition_locked = BalatrobotAPI.transition_lock.locked,
                 waiting_for_shop_init = BalatrobotAPI.shop_state.waiting_for_shop_init,
-                waiting_for_reroll = BalatrobotAPI.shop_state.waiting_for_reroll
+                waiting_for_reroll = BalatrobotAPI.shop_state.waiting_for_reroll,
+                waiting_for_pack_state = BalatrobotAPI.pack_state.waiting_for_pack_state,
+                target_pack_state = BalatrobotAPI.pack_state.target_pack_state,
+                waiting_for_hand_draw = BalatrobotAPI.pack_state.waiting_for_hand_draw
             }
             sendDebugMessage("STATUS request - " .. status .. " (state: " .. tostring(G.STATE) .. ", actions_executing: " .. tostring(Actions.executing) .. ")")
             BalatrobotAPI.respond(debug_info)
@@ -342,7 +440,7 @@ function BalatrobotAPI.init()
 
     -- Disable FPS cap
     if BALATRO_BOT_CONFIG.uncap_fps then
-        G.FPS_CAP = 1000
+        G.FPS_CAP = 10000
     end
 
     -- Makes things move instantly instead of sliding

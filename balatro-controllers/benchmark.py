@@ -16,7 +16,8 @@ class BenchmarkController(BasicBalatroController):
         self.policy_states = [
             State.SELECTING_HAND,
             State.SHOP,
-            State.GAME_OVER
+            State.GAME_OVER,
+            State.SPECTRAL_PACK,
         ]  # States we handle with our policy
         
     def reset_run(self):
@@ -26,9 +27,9 @@ class BenchmarkController(BasicBalatroController):
         self.first_round = True
         self.bought_shop_card = False
         self.selected_cards = []
-        self.shop_visit_count = 0
-        self.second_shop_actions = 0
-        
+        self.shop_actions = 0
+        self.spectral_pack_actions = 0
+
     def handle_menu(self, state):
         """Starts a new run with seed H8J6D1U."""
         if self.start_time is None:
@@ -82,57 +83,29 @@ class BenchmarkController(BasicBalatroController):
     
     def handle_shop(self, state):
         """Handle shop: first shop buy second card, second shop perform specific sequence."""
-        self.step_count += 1
+        self.shop_actions += 1
         
-        # First time entering any shop, increment visit count
-        if self.step_count == 1 or state.get('shop', {}).get('jokers', []):
-            if self.shop_visit_count == 0:
-                self.shop_visit_count = 1
-            elif self.shop_visit_count == 1 and self.second_shop_actions == 0:
-                self.shop_visit_count = 2
-        
-        if self.shop_visit_count == 1:
-            # First shop: buy second card
-            if not self.bought_shop_card:
-                shop_jokers = state.get('shop', {}).get('jokers', [])
-                print(f"Shop state: {state.get('shop', {})}")
-                if len(shop_jokers) >= 2:
-                    self.bought_shop_card = True
-                    return [Actions.BUY_CARD, 2]  # Buy second card
+        if self.shop_actions == 1:
+            return [Actions.BUY_CARD, 2]  # Buy second card
+        elif self.shop_actions == 2:
             return [Actions.END_SHOP]
-        
-        elif self.shop_visit_count == 2:
-            # Second shop: buy second pack, select first hand card, select first booster card, cash out
-            self.second_shop_actions += 1
-            
-            if self.second_shop_actions == 1:
-                # Buy the second pack
-                shop_packs = state.get('shop', {}).get('packs', [])
-                if len(shop_packs) >= 2:
-                    return [Actions.BUY_BOOSTER, 2]  # Buy second booster pack
-                return [Actions.END_SHOP]  # If no second pack, just exit
-            
-            elif self.second_shop_actions == 2:
-                # Select the first hand card
-                hand = state.get('hand', [])
-                if hand:
-                    return [Actions.SELECT_HAND_CARD, 1]
+        elif self.shop_actions == 3:
+            return [Actions.BUY_BOOSTER, 2]  # Buy second booster pack
+        elif self.shop_actions == 4:
                 return [Actions.END_SHOP]
-            
-            elif self.second_shop_actions == 3:
-                # Select the first booster card
-                booster_cards = state.get('booster', [])
-                if booster_cards:
-                    return [Actions.SELECT_BOOSTER_CARD, 1]
-                return [Actions.END_SHOP]
-            
-            else:
-                # Cash out of the shop
-                return [Actions.END_SHOP]
-        
         # Default: exit shop
         return [Actions.END_SHOP]
-    
+
+    def handle_spectral_pack(self, state):
+        """Handle spectral pack - select first card."""
+        print("Spectral Pack Action")
+        self.spectral_pack_actions += 1
+
+        if self.spectral_pack_actions == 1:
+            return [Actions.SELECT_HAND_CARD, 1]
+        elif self.spectral_pack_actions == 2:
+            return [Actions.SELECT_BOOSTER_CARD, 1]
+
     def handle_game_over(self, state):
         """Handle game over - restart the game."""
         return [Actions.START_RUN, 1, "Red Deck", "H8J6D1U", None]
@@ -145,6 +118,7 @@ def run_single_game(controller):
     controller.state_handlers[State.SELECTING_HAND] = controller.handle_selecting_hand
     controller.state_handlers[State.SHOP] = controller.handle_shop
     controller.state_handlers[State.GAME_OVER] = controller.handle_game_over
+    controller.state_handlers[State.SPECTRAL_PACK] = controller.handle_spectral_pack
     
     game_over_count = 0
     max_game_overs = 2  # Avoid infinite loops
@@ -180,9 +154,10 @@ def run_single_game(controller):
             action = controller.handle_shop(game_state)
             if action:
                 controller.do_policy_action(action)
-        else:
-            # Let automated handlers deal with other states
-            controller.run_step()
+        elif current_state == State.SPECTRAL_PACK:
+            action = controller.handle_spectral_pack(game_state)
+            if action:
+                controller.do_policy_action(action)
     
     # Fallback if we hit max game overs
     return (controller.step_count, 0, 1)
@@ -195,7 +170,7 @@ def run_benchmark(num_runs=5):
     print(f"Number of runs: {num_runs}")
     print()
     
-    controller = BenchmarkController(verbose=True)  # Less verbose for multiple runs
+    controller = BenchmarkController(verbose=False)  # Less verbose for multiple runs
     
     try:
         results = []
@@ -222,11 +197,10 @@ def run_benchmark(num_runs=5):
         
         print(f"\n=== BENCHMARK RESULTS ===")
         print(f"Number of runs: {num_runs}")
-        print(f"Average steps: {avg_steps:.1f}")
-        print(f"Average time: {avg_time:.2f} seconds")
+        print(f"Average steps per run: {avg_steps:.2f}")
+        print(f"Average time per run: {avg_time:.2f}s")
         print(f"Average steps per second: {avg_sps:.2f}")
-        print(f"Average ante reached: {avg_ante:.1f}")
-        print(f"=========================\n")
+        print("=========================")
         
     except KeyboardInterrupt:
         print("\nBenchmark interrupted by user.")

@@ -202,6 +202,30 @@ function Actions.buy_booster(booster_index)
     safe_action(function()
         if G.shop_booster and G.shop_booster.cards[booster_index] then
             local card = G.shop_booster.cards[booster_index]
+            
+            -- Determine booster pack type using name matching (same as Card:open())
+            local target_pack_state = nil
+            if card.ability and card.ability.name then
+                if card.ability.name:find('Arcana') then 
+                    target_pack_state = G.STATES.TAROT_PACK
+                elseif card.ability.name:find('Celestial') then
+                    target_pack_state = G.STATES.PLANET_PACK
+                elseif card.ability.name:find('Spectral') then
+                    target_pack_state = G.STATES.SPECTRAL_PACK
+                elseif card.ability.name:find('Standard') then
+                    target_pack_state = G.STATES.STANDARD_PACK
+                elseif card.ability.name:find('Buffoon') then
+                    target_pack_state = G.STATES.BUFFOON_PACK
+                else 
+                    error("Unknown booster pack type: " .. card.ability.name)
+                end
+            else 
+                error("Card does not have an ability name to determine pack type.")
+            end
+            
+            -- Set up pack state transition waiting
+            BalatrobotAPI.setPackStateWait(target_pack_state)
+            
             card:click()
             return execute_use_card(card)
         end

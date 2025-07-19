@@ -192,6 +192,95 @@ def format_shop_cards(shop_cards):
     
     return ", ".join(formatted_cards)
 
+def format_pack_cards(pack_cards):
+    """Format pack cards (tarot, spectral, planet, joker, playing cards) for display."""
+    if not pack_cards:
+        return "None"
+    formatted_cards = []
+    for i, card in enumerate(pack_cards):
+        name = card.get('name', 'Unknown Card')
+        description = card.get('description_text', '')
+        card_set = card.get('set', '')
+        
+        # Handle different card types
+        if card_set in ['Tarot', 'Spectral', 'Planet']:
+            # Consumable cards - just name and description
+            pass
+        elif card_set == 'Joker':
+            # Apply joker formatting
+            sell_value = card.get('sell_cost', 0)
+            # Add edition
+            edition = card.get('edition', {})
+            if edition:
+                if edition.get('foil'):
+                    name += " [Foil]"
+                if edition.get('holo'):
+                    name += " [Holographic]"
+                if edition.get('polychrome'):
+                    name += " [Polychrome]"
+                if edition.get('negative'):
+                    name += " [Negative]"
+                    
+            # Add stickers (eternal, perishable, rental)
+            if card.get('eternal'):
+                name += " [Eternal]"
+            if card.get('perishable'):
+                name += f" [Perishable {card.get('perish_tally', '?')}]"
+            if card.get('rental'):
+                name += " [Rental]"
+        else:
+            # Playing cards - apply enhancement, seal, edition formatting
+            value = card.get('value', '')
+            suit = card.get('suit', '')
+            if value and suit:
+                value_map = {
+                    'Ace': 'Ace', '2': 'Two', '3': 'Three', '4': 'Four',
+                    '5': 'Five', '6': 'Six', '7': 'Seven', '8': 'Eight',
+                    '9': 'Nine', '10': 'Ten', 'Jack': 'Jack', 'Queen': 'Queen',
+                    'King': 'King'
+                }
+                value = value_map.get(value, value)
+                name = f"{value} of {suit}"
+            
+            # Add enhancement
+            enhancement = card.get('ability_name', '')
+            if enhancement and enhancement != "Default Base":
+                name += f" ({enhancement})"
+            if enhancement == "Stone Card":
+                name = "Stone Card"
+                
+            # Add seal
+            seal = card.get('seal', 'none')
+            if seal and seal != "none":
+                name += f" [{seal} Seal]"
+            
+            # Add edition
+            edition = card.get('edition', {})
+            if edition:
+                if edition.get('foil'):
+                    name += " [Foil]"
+                if edition.get('holo'):
+                    name += " [Holographic]"
+                if edition.get('polychrome'):
+                    name += " [Polychrome]"
+                if edition.get('negative'):
+                    name += " [Negative]"
+                    
+            # Add stickers (eternal, perishable, rental)
+            if card.get('eternal'):
+                name += " [Eternal]"
+            if card.get('perishable'):
+                name += f" [Perishable {card.get('perish_tally', '?')}]"
+            if card.get('rental'):
+                name += " [Rental]"
+        
+        if description:
+            formatted_cards.append(f"{i+1}. {name} - {description}")
+        else:
+            formatted_cards.append(f"{i+1}. {name}")
+    
+    return "\n".join(formatted_cards)
+
 def format_game_state(state) -> str:
     """Format the game state for display, omitting zero or irrelevant fields.
     The game state includes:
@@ -251,9 +340,9 @@ def format_game_state(state) -> str:
         output.append("\n== Consumables ==")
         output.append(format_shop_cards(state["consumables"]))  # Reuse shop card formatting for consumables
 
-    if state.get("booster_pack"):
-        output.append("\n== Booster Pack ==")
-        output.append(format_shop_cards(state["booster_pack"]))  # Reuse shop card formatting for booster contents
+    if state.get("pack_cards"):
+        output.append("\n== Pack Cards ==")
+        output.append(format_pack_cards(state["pack_cards"]))
 
     if state.get("shop") and state["state"] == State.SHOP.value:
         shop = state["shop"]
@@ -287,15 +376,16 @@ class State(Enum): # these enums are lifted from the game code so DO NOT CHANGE 
     STANDARD_PACK = 17
     BUFFOON_PACK = 18
     NEW_ROUND = 19
+    UNKNOWN = 999
 
 EXPECTED_STATE_COMPONENTS = {
     State.SELECTING_HAND: ["hand", "round"],
     State.SHOP: ["shop"],
-    State.TAROT_PACK: ["hand", "booster_pack"],
-    State.SPECTRAL_PACK: ["hand", "booster_pack"],
-    State.PLANET_PACK: ["booster_pack"],
-    State.STANDARD_PACK: ["booster_pack"],
-    State.BUFFOON_PACK: ["booster_pack"],
+    State.TAROT_PACK: ["hand", "pack_cards"],
+    State.SPECTRAL_PACK: ["hand", "pack_cards"],
+    State.PLANET_PACK: ["pack_cards"],
+    State.STANDARD_PACK: ["pack_cards"],
+    State.BUFFOON_PACK: ["pack_cards"],
 }
 
 class Actions(Enum): # these enums are from the lua mod. you can add new ones but it requires changes in the lua mod as well
@@ -744,8 +834,8 @@ class BalatroControllerBase:
                         "required": True,
                         "constraints": {
                             "min_value": 1,
-                            "max_value": len(game_state.get('booster_pack', [])),
-                            "card_source": "booster_pack"
+                            "max_value": len(game_state.get('pack_cards', [])),
+                            "card_source": "pack_cards"
                         }
                     }
                 ]
@@ -766,8 +856,8 @@ class BalatroControllerBase:
                         "required": True,
                         "constraints": {
                             "min_value": 1,
-                            "max_value": len(game_state.get('booster_pack', [])),
-                            "card_source": "booster_pack"
+                            "max_value": len(game_state.get('pack_cards', [])),
+                            "card_source": "pack_cards"
                         }
                     }
                 ]
@@ -792,7 +882,8 @@ class BalatroControllerBase:
         if handler:
             return handler(state)
 
-        raise NotImplementedError(f"No handler implemented for state {game_state_enum.name} and it was not escalated to policy.")
+        print(f"Warning: No handler defined for state {game_state_enum.name}. Using default pass action.")
+        return [Actions.PASS]
 
     def wait_ready_state(self):
         while not self.connected:
@@ -856,7 +947,10 @@ class BalatroControllerBase:
 
                 for ps in self.policy_states:
                     if state == ps.value:
+                        print(f"run_step: Current state is a policy state: {State(state).name}. Escalating to policy...")
                         return True # Escalate to policy
+                if self.verbose:
+                    print(f"run_step: Current state is not a policy state: {State(state).name}. Continuing...")
                 
                 action = self.handle_state(self.G)
                 if action:
@@ -978,9 +1072,8 @@ class BalatroControllerBase:
 
 class BasicBalatroController(BalatroControllerBase):
     def __init__(self, verbose=False):
-        # The policy is only invoked when the game is in the SELECTING_HAND state.
-        super().__init__(verbose=verbose, policy_states=[State.SELECTING_HAND, State.SHOP])
-
+        super().__init__(verbose=verbose, policy_states=[State.SELECTING_HAND, State.SHOP, State.BUFFOON_PACK,
+                                                         State.PLANET_PACK, State.STANDARD_PACK, State.SPECTRAL_PACK, State.TAROT_PACK])
         # Define handlers for states that should be automated.
         self.state_handlers[State.MENU] = self.handle_menu
         self.state_handlers[State.BLIND_SELECT] = self.handle_blind_select
@@ -999,10 +1092,6 @@ class BasicBalatroController(BalatroControllerBase):
     def handle_blind_select(self, state):
         """Automatically selects the first available blind."""
         return [Actions.SELECT_BLIND]
-
-    def handle_booster_pack(self, state):
-        """Skips any booster pack."""
-        return [Actions.SKIP_BOOSTER_PACK]
 
     def handle_round_eval(self, state):
         return [Actions.CASH_OUT]
