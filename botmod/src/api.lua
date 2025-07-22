@@ -410,14 +410,19 @@ function BalatrobotAPI.update(dt)
                 local dispatch_func = ACTION_DISPATCH[_action[1]]
                 if dispatch_func then dispatch_func(_action) end
             else
-                -- Handle validation errors
+                -- Handle validation errors - these are immediate failures
+                local error_msg = ""
                 if _err == Utils.ERROR.NUMPARAMS then
-                    BalatrobotAPI.respond({ error = "Error: Invalid number of parameters for action " .. _action[1] })
+                    error_msg = "Error: Invalid number of parameters for action " .. _action[1]
                 elseif _err == Utils.ERROR.MSGFORMAT then
-                    BalatrobotAPI.respond({ error = "Error: Invalid message format for action " .. _action[1] })
+                    error_msg = "Error: Invalid message format for action " .. _action[1]
                 elseif _err == Utils.ERROR.INVALIDACTION then
-                    BalatrobotAPI.respond({ error = "Error: Invalid action " .. _action[1] })
+                    error_msg = "Error: Invalid action " .. _action[1]
                 end
+                -- Set the action result for consistency
+                Actions.last_action_success = false
+                sendDebugMessage("Action validation failed: " .. error_msg)
+                BalatrobotAPI.respond({ error = error_msg, action_result = false })
             end
         end
     end

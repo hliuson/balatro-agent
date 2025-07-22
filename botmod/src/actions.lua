@@ -1,5 +1,6 @@
 Actions = {}
 Actions.executing = false
+Actions.last_action_success = nil
 Actions.Buttons = {
     cash_out_button = nil,
     next_round_button = nil,
@@ -30,8 +31,16 @@ local function execute_use_card(card)
     return false
 end
 
-function Actions.done()
+function Actions.done(success)
     Actions.executing = false
+    Actions.last_action_success = success
+    if success ~= nil then
+        sendDebugMessage("Action completed with result: " .. tostring(success))
+        -- Send success/failure notification to API client
+        if BalatrobotAPI and BalatrobotAPI.respond then
+            BalatrobotAPI.respond({ action_result = success })
+        end
+    end
 end
 
 -- SAFE ACTION WRAPPER
@@ -47,7 +56,7 @@ local function safe_action(action_func)
             -- check how long we have been trying to execute this action
             if os.clock() - starttime > 5 then
                 sendDebugMessage("Action timed out after 5 seconds, yielding to allow other actions.")
-                Actions.done() -- Mark action as done to yield control
+                Actions.done(false) -- Mark action as done with failure
                 return true -- Yield to allow other actions to execute
             end
 
@@ -66,7 +75,7 @@ local function safe_action(action_func)
             -- Execute the core action logic
             local success = action_func()
             if success then
-                Actions.done()
+                Actions.done(true)
             else
                 return false -- Continue waiting for the next frame
             end
@@ -400,7 +409,7 @@ function Actions.start_run(stake, deck, seed, challenge)
                 deck = deck or "Red Deck",
                 skip_menu = true -- Recommended for bots
     })
-    Actions.done()
+    Actions.done(true)
 end
 -- Action to return to the main menu
 function Actions.return_to_menu()
@@ -411,7 +420,7 @@ function Actions.return_to_menu()
 end
 
 function Actions.pass()
-    Actions.done()
+    Actions.done(true)
 end
 
 function Actions.cash_out()
