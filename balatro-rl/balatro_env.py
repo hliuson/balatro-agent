@@ -4,11 +4,21 @@ from gymnasium import spaces
 from typing import Dict, List, Any, Tuple, Optional
 from enum import Enum
 
-# Import the existing controller
+# Import the existing controller and formatting functions
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'balatro-controllers'))
-from controller import TrainingBalatroController, Actions
+from controller import (
+    TrainingBalatroController, 
+    Actions, 
+    format_card, 
+    format_jokers, 
+    format_consumables, 
+    format_shop_cards, 
+    format_boosters, 
+    format_vouchers,
+    format_game_state
+)
 
 class CardSources(Enum):
     HAND = 0
@@ -122,6 +132,60 @@ class BalatroGymEnv(gym.Env):
         
         return obs, reward, done, False, info
 
+    def _get_observation(self) -> Dict[str, Any]:
+        """Get current observation from game state with individual card strings for pointer network"""
+        game_state = self.controller.G
+        if not game_state:
+            # Return empty observation if no game state
+            return {
+                "game_state_text": "",
+                "hand_cards": [],
+                "jokers": [],
+                "consumables": [],
+                "shop_items": [],
+                "boosters": [],
+                "vouchers": []
+            }
+        
+        # Get overall game state text
+        game_state_text = format_game_state(game_state)
+        
+        # Get individual card strings for pointer network
+        hand_cards = []
+        if game_state.get("hand"):
+            for card in game_state["hand"]:
+                hand_cards.append(format_card(card))
+        
+        # Use the refactored formatting functions that return arrays
+        jokers = format_jokers(game_state.get("jokers", []))
+        consumables = format_consumables(game_state.get("consumables", []))
+        
+        # Shop items, boosters, vouchers
+        shop_items = []
+        boosters = []
+        vouchers = []
+        
+        if game_state.get("shop"):
+            shop = game_state["shop"]
+            
+            # Shop cards (contains mixed types) - use refactored function
+            shop_items = format_shop_cards(shop.get("jokers", []))
+            
+            # Boosters - use refactored function
+            boosters = format_boosters(shop.get("boosters", []))
+            
+            # Vouchers - use refactored function
+            vouchers = format_vouchers(shop.get("vouchers", []))
+        
+        return {
+            "game_state_text": game_state_text,
+            "hand_cards": hand_cards,
+            "jokers": jokers,
+            "consumables": consumables,
+            "shop_items": shop_items,
+            "boosters": boosters,
+            "vouchers": vouchers
+        }
     
     def _action_needs_card_index(self, action: Actions) -> bool:
         """Check if action requires card index"""
@@ -144,6 +208,23 @@ class BalatroGymEnv(gym.Env):
             return -0.01  # Small penalty for invalid actions
         else:
             return 0.0  # No reward otherwise
+    
+    def _get_current_ante(self) -> int:
+        """Get current ante from game state"""
+        if self.controller.G and self.controller.G.get("game"):
+            return self.controller.G["game"].get("ante", 1)
+        return 1
+    
+    def _is_done(self) -> bool:
+        """Check if episode is complete (game over)"""
+        return self.controller.is_episode_done(self.controller.G)
+    
+    def _get_info(self) -> Dict[str, Any]:
+        """Get additional info about current state"""
+        return {
+            "ante": self._get_current_ante(),
+            "valid_action": True  # Could be enhanced based on last action result
+        }
     
     def close(self):
         """Clean up resources"""

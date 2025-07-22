@@ -121,8 +121,9 @@ def format_cards(cards):
 
 
 def format_jokers(jokers):
+    """Format jokers and return list of strings."""
     if not jokers:
-        return "None"
+        return []
     formatted_jokers = []
     for joker in jokers:
         name = joker.get('name', 'Unknown Joker')
@@ -154,12 +155,12 @@ def format_jokers(jokers):
         else:
             formatted_jokers.append(f"{name} (Sell Value: {sell_value})")
     
-    return ", ".join(formatted_jokers)
+    return formatted_jokers
 
 def format_shop_cards(shop_cards):
-    """Format shop cards (jokers, playing cards, or consumables) for display."""
+    """Format shop cards (jokers, playing cards, or consumables) and return list of strings."""
     if not shop_cards:
-        return "None"
+        return []
     formatted_cards = []
     for card in shop_cards:
         name = card.get('name', 'Unknown Card')
@@ -233,12 +234,12 @@ def format_shop_cards(shop_cards):
         else:
             formatted_cards.append(f"{name}{cost_info}")
     
-    return ", ".join(formatted_cards)
+    return formatted_cards
 
 def format_boosters(boosters):
-    """Format booster packs for display."""
+    """Format booster packs and return list of strings."""
     if not boosters:
-        return "None"
+        return []
     formatted_boosters = []
     for booster in boosters:
         name = booster.get('name', 'Unknown Booster')
@@ -255,31 +256,55 @@ def format_boosters(boosters):
         else:
             pack_info = ""
         
+        # Add edition
+        edition = booster.get('edition', {})
+        if edition:
+            if edition.get('foil'):
+                name += " [Foil]"
+            if edition.get('holo'):
+                name += " [Holographic]"
+            if edition.get('polychrome'):
+                name += " [Polychrome]"
+            if edition.get('negative'):
+                name += " [Negative]"
+        
         formatted_boosters.append(f"{name}{pack_info} (Cost: {cost})")
     
-    return ", ".join(formatted_boosters)
+    return formatted_boosters
 
 def format_vouchers(vouchers):
-    """Format vouchers for display."""
+    """Format vouchers and return list of strings."""
     if not vouchers:
-        return "None"
+        return []
     formatted_vouchers = []
     for voucher in vouchers:
         name = voucher.get('name', 'Unknown Voucher')
         cost = voucher.get('cost', 0)
         description = voucher.get('description_text', '')
         
+        # Add edition
+        edition = voucher.get('edition', {})
+        if edition:
+            if edition.get('foil'):
+                name += " [Foil]"
+            if edition.get('holo'):
+                name += " [Holographic]"
+            if edition.get('polychrome'):
+                name += " [Polychrome]"
+            if edition.get('negative'):
+                name += " [Negative]"
+        
         if description:
             formatted_vouchers.append(f"{name} (Cost: {cost}) - {description}")
         else:
             formatted_vouchers.append(f"{name} (Cost: {cost})")
     
-    return ", ".join(formatted_vouchers)
+    return formatted_vouchers
 
 def format_consumables(consumables):
-    """Format consumable cards (tarot, spectral, planet) for display."""
+    """Format consumable cards (tarot, spectral, planet) and return list of strings."""
     if not consumables:
-        return "None"
+        return []
     formatted_consumables = []
     for consumable in consumables:
         name = consumable.get('name', 'Unknown Consumable')
@@ -289,13 +314,33 @@ def format_consumables(consumables):
         # Add card type prefix for clarity
         if card_set in ['Tarot', 'Spectral', 'Planet']:
             name = f"[{card_set}] {name}"
+        
+        # Add edition
+        edition = consumable.get('edition', {})
+        if edition:
+            if edition.get('foil'):
+                name += " [Foil]"
+            if edition.get('holo'):
+                name += " [Holographic]"
+            if edition.get('polychrome'):
+                name += " [Polychrome]"
+            if edition.get('negative'):
+                name += " [Negative]"
+        
+        # Add stickers (eternal, perishable, rental)
+        if consumable.get('eternal'):
+            name += " [Eternal]"
+        if consumable.get('perishable'):
+            name += f" [Perishable {consumable.get('perish_tally', '?')}]"
+        if consumable.get('rental'):
+            name += " [Rental]"
 
         if description:
             formatted_consumables.append(f"{name} - {description}")
         else:
             formatted_consumables.append(name)
     
-    return ", ".join(formatted_consumables)
+    return formatted_consumables
 
 def format_pack_cards(pack_cards):
     """Format pack cards (tarot, spectral, planet, joker, playing cards) for display."""
@@ -439,11 +484,19 @@ def format_game_state(state) -> str:
 
     if state.get("jokers"):
         output.append("\n== Jokers ==")
-        output.append(format_jokers(state["jokers"]))
+        jokers_list = format_jokers(state["jokers"])
+        if jokers_list:
+            output.append(", ".join(jokers_list))
+        else:
+            output.append("None")
 
     if state.get("consumables"):
         output.append("\n== Consumables ==")
-        output.append(format_consumables(state["consumables"]))
+        consumables_list = format_consumables(state["consumables"])
+        if consumables_list:
+            output.append(", ".join(consumables_list))
+        else:
+            output.append("None")
 
     if state.get("pack_cards"):
         output.append("\n== Pack Cards ==")
@@ -455,12 +508,25 @@ def format_game_state(state) -> str:
         
         # G.shop_jokers contains mixed card types (jokers, consumables, playing cards)
         if shop.get("jokers"):
-            output.append(f"Shop Cards: {format_shop_cards(shop['jokers'])}")
+            shop_cards_list = format_shop_cards(shop['jokers'])
+            if shop_cards_list:
+                output.append(f"Shop Cards: {', '.join(shop_cards_list)}")
+            else:
+                output.append("Shop Cards: None")
         
         if shop.get("vouchers"):
-            output.append(f"Vouchers: {format_vouchers(shop['vouchers'])}")
+            vouchers_list = format_vouchers(shop['vouchers'])
+            if vouchers_list:
+                output.append(f"Vouchers: {', '.join(vouchers_list)}")
+            else:
+                output.append("Vouchers: None")
+        
         if shop.get("boosters"):
-            output.append(f"Boosters: {format_boosters(shop['boosters'])}")
+            boosters_list = format_boosters(shop['boosters'])
+            if boosters_list:
+                output.append(f"Boosters: {', '.join(boosters_list)}")
+            else:
+                output.append("Boosters: None")
     
     return "\n".join(output)
 
