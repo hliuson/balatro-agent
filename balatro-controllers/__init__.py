@@ -23,7 +23,12 @@ from .controller import (
     get_available_port,
     is_port_available,
     format_card,
-    format_cards
+    format_cards,
+    format_jokers,
+    format_shop_cards,
+    format_boosters,
+    format_vouchers,
+    format_consumables,
 )
 
 __version__ = "0.1.0"
@@ -37,6 +42,11 @@ __all__ = [
     "format_game_state",
     "format_card",
     "format_cards",
+    "format_jokers",
+    "format_shop_cards",
+    "format_boosters",
+    "format_vouchers",
+    "format_consumables",
     "get_available_port",
     "is_port_available",
 ]

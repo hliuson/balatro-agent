@@ -204,6 +204,68 @@ def format_shop_cards(shop_cards):
     
     return ", ".join(formatted_cards)
 
+def format_boosters(boosters):
+    """Format booster packs for display."""
+    if not boosters:
+        return "None"
+    formatted_boosters = []
+    for booster in boosters:
+        name = booster.get('name', 'Unknown Booster')
+        cost = booster.get('cost', 0)
+        kind = booster.get('kind', '')
+        
+        # Add pack type info if available
+        extra = booster.get('extra', 0)
+        choose = booster.get('choose', 0)
+        if extra and choose:
+            pack_info = f" ({extra} cards, choose {choose})"
+        elif extra:
+            pack_info = f" ({extra} cards)"
+        else:
+            pack_info = ""
+        
+        formatted_boosters.append(f"{name}{pack_info} (Cost: {cost})")
+    
+    return ", ".join(formatted_boosters)
+
+def format_vouchers(vouchers):
+    """Format vouchers for display."""
+    if not vouchers:
+        return "None"
+    formatted_vouchers = []
+    for voucher in vouchers:
+        name = voucher.get('name', 'Unknown Voucher')
+        cost = voucher.get('cost', 0)
+        description = voucher.get('description_text', '')
+        
+        if description:
+            formatted_vouchers.append(f"{name} (Cost: {cost}) - {description}")
+        else:
+            formatted_vouchers.append(f"{name} (Cost: {cost})")
+    
+    return ", ".join(formatted_vouchers)
+
+def format_consumables(consumables):
+    """Format consumable cards (tarot, spectral, planet) for display."""
+    if not consumables:
+        return "None"
+    formatted_consumables = []
+    for consumable in consumables:
+        name = consumable.get('name', 'Unknown Consumable')
+        card_set = consumable.get('set', '')
+        description = consumable.get('description_text', '')
+        
+        # Add card type prefix for clarity
+        if card_set in ['Tarot', 'Spectral', 'Planet']:
+            name = f"[{card_set}] {name}"
+
+        if description:
+            formatted_consumables.append(f"{name} - {description}")
+        else:
+            formatted_consumables.append(name)
+    
+    return ", ".join(formatted_consumables)
+
 def format_pack_cards(pack_cards):
     """Format pack cards (tarot, spectral, planet, joker, playing cards) for display."""
     if not pack_cards:
@@ -350,7 +412,7 @@ def format_game_state(state) -> str:
 
     if state.get("consumables"):
         output.append("\n== Consumables ==")
-        output.append(format_shop_cards(state["consumables"]))  # Reuse shop card formatting for consumables
+        output.append(format_consumables(state["consumables"]))
 
     if state.get("pack_cards"):
         output.append("\n== Pack Cards ==")
@@ -362,9 +424,9 @@ def format_game_state(state) -> str:
         if shop.get("jokers"):
             output.append(f"Shop Cards: {format_shop_cards(shop['jokers'])}")
         if shop.get("vouchers"):
-            output.append(f"Vouchers: {shop['vouchers']}")
+            output.append(f"Vouchers: {format_vouchers(shop['vouchers'])}")
         if shop.get("boosters"):
-            output.append(f"Boosters: {shop['boosters']}")
+            output.append(f"Boosters: {format_boosters(shop['boosters'])}")
     
     return "\n".join(output)
 
