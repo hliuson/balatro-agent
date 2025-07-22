@@ -1,0 +1,151 @@
+import gymnasium as gym
+import numpy as np
+from gymnasium import spaces
+from typing import Dict, List, Any, Tuple, Optional
+from enum import Enum
+
+# Import the existing controller
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'balatro-controllers'))
+from controller import TrainingBalatroController, Actions
+
+class CardSources(Enum):
+    HAND = 0
+    JOKER = 1
+    CONSUMABLE = 2
+    SHOP = 3
+    BOOSTERPACK = 4
+    BOOSTERCARD = 5
+    VOUCHER = 6
+
+ACTION_TO_SOURCE = {
+    Actions.SELECT_HAND_CARD: CardSources.HAND,
+    Actions.SELL_JOKER: CardSources.JOKER,
+    Actions.USE_CONSUMABLE: CardSources.CONSUMABLE,
+    Actions.BUY_CARD: CardSources.SHOP,
+    Actions.BUY_VOUCHER: CardSources.VOUCHER,
+    Actions.BUY_BOOSTER: CardSources.BOOSTERPACK,
+    Actions.SELECT_BOOSTER_CARD: CardSources.BOOSTERCARD,
+}
+
+class BalatroGymEnv(gym.Env):
+    """Minimal Balatro Gymnasium Environment using text observations"""
+    
+    def __init__(self):
+        super().__init__()
+        
+        # Initialize the Balatro controller
+        self.controller = TrainingBalatroController()
+        
+        # Define observation space
+        self.observation_space = spaces.Dict({
+            "game_state_text": spaces.Text(max_length=2048),
+            "hand_cards": spaces.Sequence(spaces.Text(max_length=256)),
+            "jokers": spaces.Sequence(spaces.Text(max_length=256)),
+            "consumables": spaces.Sequence(spaces.Text(max_length=256)),
+            "shop_items": spaces.Sequence(spaces.Text(max_length=256)),
+            "boosters": spaces.Sequence(spaces.Text(max_length=256)),
+            "vouchers": spaces.Sequence(spaces.Text(max_length=256)),
+        })
+        
+        # Define action space
+        self.action_space = spaces.Dict({
+            "action_type": spaces.Discrete(len(Actions)),
+            "card_index": spaces.Box(low=0, high=np.inf, shape=(2,), dtype=np.int32),
+            # card_index format: [CardSources.value, index_in_source]
+        })
+        
+        # Track previous ante for reward calculation
+        self.prev_ante = 1
+        
+    def reset(self, seed=None, options=None):
+        """Reset the environment to start a new episode"""
+        super().reset(seed=seed)
+        
+        # Start a new game using controller's restart_run method
+        game_state = self.controller.restart_run()
+        self.prev_ante = 1
+        
+        # Get initial observation
+        obs = self._get_observation()
+        info = self._get_info()
+        
+        return obs, info
+    
+    def step(self, action):
+        """Execute one step in the environment"""
+        action_type = action["action_type"]
+        card_index = action["card_index"]
+        
+        # Convert action to controller format
+        controller_action = Actions(action_type)
+        
+        # Build action list for controller
+        try:
+            if self._action_needs_card_index(controller_action):
+                # Convert 2D card index to appropriate argument
+                card_source = CardSources(card_index[0])  # Use enum for validation
+                if card_source not in ACTION_TO_SOURCE.values():
+                    #THIS should never happen since we use pointer networks.
+                    raise ValueError(f"Invalid card source: {card_source}")
+
+                if ACTION_TO_SOURCE[controller_action] != card_source:
+                    # This might happen if we don't properly action mask cards.
+                    # Ideally the policy should just learn to select the right cards though.
+                    raise ValueError(f"Action {controller_action} does not match card source {card_source}")
+            
+                card_index_in_source = int(card_index[1])
+                action_list = [controller_action, card_index_in_source]
+            else:
+                # Action doesn't need card selection
+                action_list = [controller_action]
+            
+            # Execute action through controller's do_policy_action
+            action_valid, game_state = self.controller.do_policy_action(action_list)
+            
+        except Exception as e:
+            action_valid = False
+            game_state = self.controller.G  # Get current game state
+        
+        # Get current state
+        obs = self._get_observation()
+        info = self._get_info()
+        
+        # Calculate reward
+        current_ante = self._get_current_ante()
+        reward = self._calculate_reward(current_ante, action_valid)
+        self.prev_ante = current_ante
+        
+        # Check if episode is done
+        done = self._is_done()
+        
+        return obs, reward, done, False, info
+
+    
+    def _action_needs_card_index(self, action: Actions) -> bool:
+        """Check if action requires card index"""
+        card_actions = {
+            Actions.SELECT_HAND_CARD,
+            Actions.BUY_CARD,
+            Actions.BUY_VOUCHER,
+            Actions.SELL_JOKER,
+            Actions.USE_CONSUMABLE,
+            Actions.BUY_BOOSTER,
+            Actions.SELECT_BOOSTER_CARD,
+        }
+        return action in card_actions
+    
+    def _calculate_reward(self, current_ante: int, action_valid: bool) -> float:
+        """Calculate reward based on ante progression and action validity"""
+        if current_ante > self.prev_ante:
+            return 1.0  # Reward for advancing ante
+        elif not action_valid:
+            return -0.01  # Small penalty for invalid actions
+        else:
+            return 0.0  # No reward otherwise
+    
+    def close(self):
+        """Clean up resources"""
+        if hasattr(self.controller, 'close'):
+            self.controller.close()
