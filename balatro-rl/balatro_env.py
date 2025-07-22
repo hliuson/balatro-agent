@@ -7,7 +7,6 @@ from enum import Enum
 # Import the existing controller and formatting functions
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'balatro-controllers'))
 from controller import (
     TrainingBalatroController, 
     Actions, 
@@ -47,6 +46,7 @@ class BalatroGymEnv(gym.Env):
         
         # Initialize the Balatro controller
         self.controller = TrainingBalatroController()
+        self.controller.run_until_policy()
         
         # Define observation space
         self.observation_space = spaces.Dict({

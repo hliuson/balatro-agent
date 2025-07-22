@@ -1357,7 +1357,7 @@ class BasicBalatroController(BalatroControllerBase):
 class TrainingBalatroController(BalatroControllerBase):
     def __init__(self, verbose=False):
         # The policy is invoked for SELECTING_HAND, SHOP, and GAME_OVER states
-        super().__init__(verbose=verbose, policy_states=[State.SELECTING_HAND, State.SHOP, State.GAME_OVER])
+        super().__init__(verbose=verbose, policy_states=[State.SELECTING_HAND, State.SHOP, State.GAME_OVER], auto_start=True)
 
         # Define handlers for states that should be automated.
         self.state_handlers[State.MENU] = self.handle_menu

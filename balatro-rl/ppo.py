@@ -138,18 +138,18 @@ class Agent(nn.Module):
         inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
         inputs = {k: v.to(self.text_encoder.device) for k, v in inputs.items()}
         with torch.no_grad():
-            outputs = self.text_encoder(**inputs)
-        return outputs.last_hidden_state[:, -1, :]  # Use last token embedding
+            outputs = self.text_encoder(**inputs, output_hidden_states=True)
+        return outputs.hidden_states[-1][:, -1, :]  # Use last token embedding
 
     def get_value(self, observation: Dict[str, List[str]], lstm_hidden: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
-        x = self.text_encode(observation["obs"])
+        x = self.text_encode(observation["game_state_text"])
         x, _ = self.torso(x.unsqueeze(1), lstm_hidden)
         x = x.squeeze(1)
         return self.critic(x)
 
     def get_action_and_value(self, observation: Dict[str, List[str]], lstm_hidden: Tuple[torch.Tensor, torch.Tensor], action=None, card=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         # Provide action and card fields in case of re-computation
-        x = self.text_encode(observation["obs"])
+        x = self.text_encode(observation["game_state_text"])
         x, new_lstm_hidden = self.torso(x.unsqueeze(1), lstm_hidden) 
         x = x.squeeze(1)
 
