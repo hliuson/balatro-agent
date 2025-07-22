@@ -8,8 +8,11 @@ from enum import Enum
 #from gamestates import cache_state
 import subprocess
 import random
-import multiprocessing
+import threading
 import socket
+
+_port_lock = threading.Lock()
+_used_ports = set()
 
 def is_port_available(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -20,9 +23,18 @@ def is_port_available(port):
             return False
         
 def get_available_port():
-    with multiprocessing.Pool(processes=1) as pool:
-        available_port = next(port for port in range(12346, 65536) if pool.apply(is_port_available, (port,)))
-    return available_port
+    """Thread-safe port allocation for parallel execution."""
+    with _port_lock:
+        for port in range(12346, 65536):
+            if port not in _used_ports and is_port_available(port):
+                _used_ports.add(port)
+                return port
+        raise RuntimeError("No available ports")
+
+def release_port(port):
+    """Release a port when controller is closed."""
+    with _port_lock:
+        _used_ports.discard(port)
 
 def format_card(card):
     """Format a single card for display."""
@@ -419,6 +431,7 @@ class BalatroControllerBase:
         self,
         verbose = False,
         policy_states = [],
+        auto_start = True,
     ):
         self.G = None
         self.port = get_available_port()
@@ -436,7 +449,8 @@ class BalatroControllerBase:
         self.state_handlers[State.DRAW_TO_HAND] = self.pass_action
         self.state_handlers[State.NEW_ROUND] = self.pass_action
         self.connected = False
-        self.start_balatro_instance()
+        if auto_start:
+            self.start_balatro_instance()
 
     def pass_action(self, state):
         """
@@ -481,20 +495,38 @@ class BalatroControllerBase:
         return json.loads(data)
 
     def get_next_display(self):
-        """Find next available display number starting from 99"""
-        for display_num in range(99, 0, -1):
-            result = subprocess.run(['pgrep', '-f', f'Xvfb :{display_num}'], 
-                                  capture_output=True)
-            if result.returncode != 0:  # Display not in use
-                return display_num
-        raise RuntimeError("No available displays")
+        """Find next available display number starting from 99 - thread-safe"""
+        with _port_lock:  # Reuse the same lock for simplicity
+            for display_num in range(99, 0, -1):
+                if display_num in getattr(self.__class__, '_used_displays', set()):
+                    continue
+                result = subprocess.run(['pgrep', '-f', f'Xvfb :{display_num}'], 
+                                      capture_output=True)
+                if result.returncode != 0:  # Display not in use
+                    # Track used displays at class level
+                    if not hasattr(self.__class__, '_used_displays'):
+                        self.__class__._used_displays = set()
+                    self.__class__._used_displays.add(display_num)
+                    return display_num
+            raise RuntimeError("No available displays")
 
     def start_virtual_display(self, display_num):
         """Start Xvfb on specific display"""
-        subprocess.Popen(['Xvfb', f':{display_num}', '-screen', '0', '1024x768x24'],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.display_process = subprocess.Popen(
+            ['Xvfb', f':{display_num}', '-screen', '0', '1024x768x24'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
         time.sleep(0.5)
         return f':{display_num}'
+
+    def cleanup_display(self, display_num):
+        """Clean up virtual display"""
+        if hasattr(self, 'display_process') and self.display_process:
+            self.display_process.terminate()
+            self.display_process.wait()
+        # Remove from used displays
+        if hasattr(self.__class__, '_used_displays'):
+            self.__class__._used_displays.discard(display_num)
 
     def setup_display_for_linux(self):
         """Set up display for Linux - always use virtual display for consistency"""
@@ -502,8 +534,8 @@ class BalatroControllerBase:
             return
             
         # Always use virtual display for headless operation
-        display_num = self.get_next_display()
-        display = self.start_virtual_display(display_num)
+        self.display_num = self.get_next_display()
+        display = self.start_virtual_display(self.display_num)
         
         # Set DISPLAY in our environment
         if not hasattr(self, 'balatro_env') or self.balatro_env is None:
@@ -896,7 +928,7 @@ class BalatroControllerBase:
         while tries < max_tries:
             if self.get_status() == 'READY':
                 return True
-            time.sleep(0.1) # this is 0.1 seconds, so 10 times per second
+            time.sleep(0.01) # this is 0.1 seconds, so 10 times per second
             tries += 1
         raise ConnectionError("Balatro did not reach READY state after 10 seconds. Is it running?")
 
@@ -947,7 +979,8 @@ class BalatroControllerBase:
 
                 for ps in self.policy_states:
                     if state == ps.value:
-                        print(f"run_step: Current state is a policy state: {State(state).name}. Escalating to policy...")
+                        if self.verbose:
+                            print(f"run_step: Current state is a policy state: {State(state).name}. Escalating to policy...")
                         return True # Escalate to policy
                 if self.verbose:
                     print(f"run_step: Current state is not a policy state: {State(state).name}. Continuing...")
@@ -964,7 +997,7 @@ class BalatroControllerBase:
                         print("run_step: No action returned by handler.")
                     pass
             else: # Status is BUSY
-                time.sleep(0.1) # Wait before checking status again
+                time.sleep(0.01) # Wait before checking status again
 
         except socket.timeout:
             raise ConnectionError("Socket timed out. Is Balatro running?")
@@ -992,12 +1025,53 @@ class BalatroControllerBase:
         return self.G # Return the game state that caused the loop to stop
     
     
+    def wait_for_action_result(self, timeout=10):
+        """
+        Wait for action result (success/failure) from the Lua side.
+        Returns True for success, False for failure, None for timeout.
+        """
+        if not self.sock:
+            return None
+            
+        # Save original timeout
+        original_timeout = self.sock.gettimeout()
+        
+        try:
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                try:
+                    self.sock.settimeout(0.1)
+                    data, _ = self.sock.recvfrom(65536)
+                    response = json.loads(data)
+                    
+                    # Check if this response contains an action result
+                    if 'response' in response and isinstance(response['response'], dict):
+                        if 'action_result' in response['response']:
+                            return response['response']['action_result']
+                    elif 'action_result' in response:
+                        return response['action_result']
+                        
+                except (socket.timeout, json.JSONDecodeError):
+                    continue
+                except Exception as e:
+                    if self.verbose:
+                        print(f"Error waiting for action result: {e}")
+                    break
+                    
+            return None  # Timeout or error
+        finally:
+            # Restore original timeout
+            if self.sock:
+                self.sock.settimeout(original_timeout)
+
     def do_policy_action(self, action):
         """
         Perform a policy action on the Balatro instance.
         This method sends the action command to the Balatro instance and waits for the policy to be reached.
 
         args: action (list): The action to perform (e.g., [Actions.SELECT_HAND_CARD, 1] or [Actions.PLAY_SELECTED]), including the action type and any necessary arguments.
+        
+        returns: tuple (success: bool, game_state: dict) - success indicates if action succeeded, game_state is the resulting state
         """
         if not self.connected:
             raise ConnectionError("Not connected to Balatro instance.")
@@ -1005,7 +1079,17 @@ class BalatroControllerBase:
         if status == 'READY':
             cmdstr = self.actionToCmd(action)
             self.sendcmd(cmdstr)
-            return self.run_until_policy()
+            
+            # Wait for action result
+            action_success = self.wait_for_action_result()
+            if action_success is None:
+                if self.verbose:
+                    print("Warning: Action result timeout, assuming failure")
+                action_success = False
+            
+            # Get the resulting game state
+            game_state = self.run_until_policy()
+            return action_success, game_state
         else:
             raise ConnectionError(f"Cannot perform action, current status is {status}. Expected 'READY'.")
 
@@ -1019,6 +1103,14 @@ class BalatroControllerBase:
         if self.sock:
             self.sock.close()
             self.sock = None
+        
+        # Clean up display resources
+        if hasattr(self, 'display_num') and platform.system() == "Linux":
+            self.cleanup_display(self.display_num)
+        
+        # Release allocated port
+        if hasattr(self, 'port'):
+            release_port(self.port)
         
         # Reset the bot's running state and connection status
         self.connected = False
@@ -1065,15 +1157,19 @@ class BalatroControllerBase:
                 
                 action = [action_enum] + action_args
                 print(f"Executing policy action: {action}")
-                self.do_policy_action(action)
+                success, game_state = self.do_policy_action(action)
+                if success:
+                    print("✓ Action succeeded")
+                else:
+                    print("✗ Action failed")
             except (KeyError, ValueError, IndexError) as e:
                 print(f"Invalid input: {e}")
                 print("Please try again.")        
 
 class BasicBalatroController(BalatroControllerBase):
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, auto_start=True):
         super().__init__(verbose=verbose, policy_states=[State.SELECTING_HAND, State.SHOP, State.BUFFOON_PACK,
-                                                         State.PLANET_PACK, State.STANDARD_PACK, State.SPECTRAL_PACK, State.TAROT_PACK])
+                                                         State.PLANET_PACK, State.STANDARD_PACK, State.SPECTRAL_PACK, State.TAROT_PACK], auto_start=auto_start)
         # Define handlers for states that should be automated.
         self.state_handlers[State.MENU] = self.handle_menu
         self.state_handlers[State.BLIND_SELECT] = self.handle_blind_select
