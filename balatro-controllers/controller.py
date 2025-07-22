@@ -157,6 +157,7 @@ def format_jokers(jokers):
     return ", ".join(formatted_jokers)
 
 def format_shop_cards(shop_cards):
+    """Format shop cards (jokers, playing cards, or consumables) for display."""
     if not shop_cards:
         return "None"
     formatted_cards = []
@@ -164,20 +165,50 @@ def format_shop_cards(shop_cards):
         name = card.get('name', 'Unknown Card')
         cost = card.get('cost', 0)
         description = card.get('description_text', '')
+        card_set = card.get('set', '')
         
-        # Add enhancement for playing cards
-        enhancement = card.get('ability_name', '')
-        if enhancement and enhancement != "Default Base":
-            name += f" ({enhancement})"
-        if enhancement == "Stone Card":
-            name = "Stone Card"
+        # Handle different card types
+        if card_set == 'Joker':
+            # Joker formatting - include sell value if available
+            sell_value = card.get('sell_cost', 0)
+            if sell_value > 0:
+                cost_info = f" (Cost: {cost}, Sell: {sell_value})"
+            else:
+                cost_info = f" (Cost: {cost})"
+        elif card_set in ['Tarot', 'Spectral', 'Planet']:
+            # Consumable formatting - add type prefix
+            name = f"[{card_set}] {name}"
+            cost_info = f" (Cost: {cost})"
+        else:
+            # Playing cards or other types
+            value = card.get('value', '')
+            suit = card.get('suit', '')
+            if value and suit:
+                # Format playing card name
+                value_map = {
+                    'Ace': 'Ace', '2': 'Two', '3': 'Three', '4': 'Four',
+                    '5': 'Five', '6': 'Six', '7': 'Seven', '8': 'Eight',
+                    '9': 'Nine', '10': 'Ten', 'Jack': 'Jack', 'Queen': 'Queen',
+                    'King': 'King'
+                }
+                value = value_map.get(value, value)
+                name = f"{value} of {suit}"
             
-        # Add seal
-        seal = card.get('seal', 'none')
-        if seal and seal != "none":
-            name += f" [{seal} Seal]"
+            # Add enhancement for playing cards
+            enhancement = card.get('ability_name', '')
+            if enhancement and enhancement != "Default Base":
+                name += f" ({enhancement})"
+            if enhancement == "Stone Card":
+                name = "Stone Card"
+                
+            # Add seal for playing cards
+            seal = card.get('seal', 'none')
+            if seal and seal != "none":
+                name += f" [{seal} Seal]"
+            
+            cost_info = f" (Cost: {cost})"
         
-        # Add edition
+        # Add edition (applies to all card types)
         edition = card.get('edition', {})
         if edition:
             if edition.get('foil'):
@@ -189,7 +220,7 @@ def format_shop_cards(shop_cards):
             if edition.get('negative'):
                 name += " [Negative]"
                 
-        # Add stickers (eternal, perishable, rental)
+        # Add stickers (applies to all card types)
         if card.get('eternal'):
             name += " [Eternal]"
         if card.get('perishable'):
@@ -198,9 +229,9 @@ def format_shop_cards(shop_cards):
             name += " [Rental]"
         
         if description:
-            formatted_cards.append(f"{name} (Cost: {cost}) - {description}")
+            formatted_cards.append(f"{name}{cost_info} - {description}")
         else:
-            formatted_cards.append(f"{name} (Cost: {cost})")
+            formatted_cards.append(f"{name}{cost_info}")
     
     return ", ".join(formatted_cards)
 
@@ -421,8 +452,11 @@ def format_game_state(state) -> str:
     if state.get("shop") and state["state"] == State.SHOP.value:
         shop = state["shop"]
         output.append("\n== Shop ==")
+        
+        # G.shop_jokers contains mixed card types (jokers, consumables, playing cards)
         if shop.get("jokers"):
             output.append(f"Shop Cards: {format_shop_cards(shop['jokers'])}")
+        
         if shop.get("vouchers"):
             output.append(f"Vouchers: {format_vouchers(shop['vouchers'])}")
         if shop.get("boosters"):
