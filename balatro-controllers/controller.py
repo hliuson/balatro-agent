@@ -1390,7 +1390,21 @@ class TrainingBalatroController(BalatroControllerBase):
         self.state_handlers[State.BLIND_SELECT] = self.handle_blind_select
         self.state_handlers[State.ROUND_EVAL] = self.handle_round_eval
         
+        # Simple permissions: actions that should be blocked for RL training
+        self.blocked_actions = {Actions.START_RUN, Actions.RETURN_TO_MENU, Actions.CASH_OUT}
+        
         # Track episode state
+
+    def do_policy_action(self, action):
+        """Override to block restricted actions - just no-op if blocked"""
+        if len(action) > 0 and action[0] in self.blocked_actions:
+            if self.verbose:
+                print(f"Blocked action {action[0].name} - no-op")
+            # Return failed action result to indicate the action was invalid
+            return False, self.G
+        
+        # Call parent implementation for allowed actions
+        return super().do_policy_action(action)
 
     def handle_menu(self, state):
         """Starts a new run from the main menu."""
