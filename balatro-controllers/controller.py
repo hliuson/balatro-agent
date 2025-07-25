@@ -10,9 +10,25 @@ import subprocess
 import random
 import threading
 import socket
+import atexit
+import weakref
 
 _port_lock = threading.Lock()
 _used_ports = set()
+
+# Track active controllers for cleanup on exit
+_active_controllers = weakref.WeakSet()
+
+def _cleanup_all_controllers():
+    """Emergency cleanup function called on process exit"""
+    for controller in list(_active_controllers):
+        try:
+            controller.close()
+        except:
+            pass  # Ignore errors during emergency cleanup
+
+# Register cleanup for process exit
+atexit.register(_cleanup_all_controllers)
 
 def is_port_available(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -611,6 +627,10 @@ class BalatroControllerBase:
         self.state_handlers[State.DRAW_TO_HAND] = self.pass_action
         self.state_handlers[State.NEW_ROUND] = self.pass_action
         self.connected = False
+        
+        # Register for cleanup
+        _active_controllers.add(self)
+        
         if auto_start:
             self.start_balatro_instance()
 
@@ -1257,28 +1277,34 @@ class BalatroControllerBase:
 
 
     def close(self):
-        # Stop the Balatro instance if it's running
-        if self.balatro_instance:
-            self.stop_balatro_instance()
-        
-        # Close the socket connection if it's open
-        if self.sock:
-            self.sock.close()
-            self.sock = None
-        
-        # Clean up display resources
-        if hasattr(self, 'display_num') and platform.system() == "Linux":
-            self.cleanup_display(self.display_num)
-        
-        # Release allocated port
-        if hasattr(self, 'port'):
-            release_port(self.port)
-        
-        # Reset the bot's running state and connection status
-        self.connected = False
-        
-        # Clear any stored state
-        self.G = None
+        """Clean up all resources - safe to call multiple times"""
+        try:
+            # Stop the Balatro instance if it's running
+            if self.balatro_instance:
+                self.stop_balatro_instance()
+                self.balatro_instance = None
+            
+            # Close the socket connection if it's open
+            if self.sock:
+                self.sock.close()
+                self.sock = None
+            
+            # Clean up display resources
+            if hasattr(self, 'display_num') and platform.system() == "Linux":
+                self.cleanup_display(self.display_num)
+            
+            # Release allocated port
+            if hasattr(self, 'port'):
+                release_port(self.port)
+            
+            # Reset the bot's running state and connection status
+            self.connected = False
+            
+            # Clear any stored state
+            self.G = None
+            
+        except Exception:
+            pass  # Ignore errors during cleanup
 
     def run_as_cli(self):
         print("Starting Balatro environment in CLI mode.")
