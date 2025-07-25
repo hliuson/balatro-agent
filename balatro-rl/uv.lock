@@ -30,6 +30,7 @@ dependencies = [
     { name = "numpy" },
     { name = "tensorboard" },
     { name = "torch" },
+    { name = "tqdm" },
     { name = "transformers" },
     { name = "tyro" },
 ]
@@ -41,6 +42,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3.1" },
     { name = "tensorboard", specifier = ">=2.20.0" },
     { name = "torch", specifier = ">=2.7.1" },
+    { name = "tqdm", specifier = ">=4.67.1" },
     { name = "transformers", specifier = ">=4.53.2" },
     { name = "tyro", specifier = ">=0.9.26" },
 ]

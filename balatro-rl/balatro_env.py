@@ -57,6 +57,7 @@ class BalatroGymEnv(gym.Env):
             "shop_items": spaces.Sequence(spaces.Text(max_length=256)),
             "boosters": spaces.Sequence(spaces.Text(max_length=256)),
             "vouchers": spaces.Sequence(spaces.Text(max_length=256)),
+            "action_mask": spaces.Box(low=0, high=1, shape=(len(Actions),), dtype=np.int8),
         })
         
         # Define action space
@@ -144,7 +145,8 @@ class BalatroGymEnv(gym.Env):
                 "consumables": [],
                 "shop_items": [],
                 "boosters": [],
-                "vouchers": []
+                "vouchers": [],
+                "action_mask": np.ones(len(Actions), dtype=np.int8)  # Allow all actions if no state
             }
         
         # Get overall game state text
@@ -177,6 +179,9 @@ class BalatroGymEnv(gym.Env):
             # Vouchers - use refactored function
             vouchers = format_vouchers(shop.get("vouchers", []))
         
+        # Generate action mask based on valid actions
+        action_mask = self._get_action_mask(game_state)
+        
         return {
             "game_state_text": game_state_text,
             "hand_cards": hand_cards,
@@ -184,8 +189,34 @@ class BalatroGymEnv(gym.Env):
             "consumables": consumables,
             "shop_items": shop_items,
             "boosters": boosters,
-            "vouchers": vouchers
+            "vouchers": vouchers,
+            "action_mask": action_mask
         }
+    
+    def _get_action_mask(self, game_state: Dict[str, Any]) -> np.ndarray:
+        """Generate action mask based on currently valid actions"""
+        mask = np.zeros(len(Actions), dtype=np.int8)
+        
+        try:
+            # Get valid actions from controller
+            valid_actions = self.controller.get_valid_actions(game_state)
+            
+            # Convert valid action names to mask
+            for valid_action in valid_actions:
+                action_name = valid_action.get("action", "")
+                try:
+                    action_enum = Actions[action_name]
+                    mask[action_enum.value] = 1
+                except (KeyError, AttributeError):
+                    # Skip invalid action names
+                    continue
+                    
+        except Exception as e:
+            # If we can't get valid actions, allow all actions as fallback
+            print(f"Warning: Could not get valid actions, allowing all: {e}")
+            mask.fill(1)
+            
+        return mask
     
     def _action_needs_card_index(self, action: Actions) -> bool:
         """Check if action requires card index"""

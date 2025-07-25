@@ -16,6 +16,7 @@ from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Any, Dict, List, Tuple, Union
 
+from tqdm import tqdm
 
 @dataclass
 class Args:
@@ -157,8 +158,8 @@ class Agent(nn.Module):
 
     def get_value(self, observation: Dict[str, List[str]], lstm_hidden: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         x = self.text_encode(observation["game_state_text"])
-        x, _ = self.torso(x.unsqueeze(1), lstm_hidden)
-        x = x.squeeze(1)
+        x = x.view(-1, 1, x.size(-1))  # Add batch dimension for LSTM
+        x, _ = self.torso(x, lstm_hidden)
         return self.critic(x)
 
     def get_action_and_value(self, observation: Dict[str, List[str]], lstm_hidden: Tuple[torch.Tensor, torch.Tensor], action=None, card=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -168,7 +169,12 @@ class Agent(nn.Module):
         x = x.view(-1, 1, x.size(-1))  # Add batch dimension for LSTM
         x, new_lstm_hidden = self.torso(x, lstm_hidden)
 
-        action_logits = self.actor(x)
+        action_logits = self.actor(x).squeeze()
+        action_masks = observation["action_mask"] 
+        mask_tensor = torch.tensor(action_masks, dtype=torch.bool, device=action_logits.device)
+
+        action_logits = action_logits.masked_fill(~mask_tensor, -1e8)
+
         action_dist = Categorical(logits=action_logits)
         if action is None:
             action = action_dist.sample()
@@ -347,8 +353,7 @@ if __name__ == "__main__":
     # For now, we'll assume it's properly formatted
     next_done = torch.zeros(args.num_envs).to(device)
 
-    for iteration in range(1, args.num_iterations + 1):
-        print(f"Iteration {iteration}/{args.num_iterations}, global_step={global_step}")
+    for iteration in tqdm(range(1, args.num_iterations + 1)):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
@@ -356,7 +361,6 @@ if __name__ == "__main__":
             optimizer.param_groups[0]["lr"] = lrnow
 
         for step in range(0, args.num_steps):
-            print(f"Step {step + 1}/{args.num_steps}, global_step={global_step}")
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
@@ -387,7 +391,6 @@ if __name__ == "__main__":
             card_indices = []
             
             for i in range(args.num_envs):
-                print(f"Processing environment {i + 1}/{args.num_envs}")
                 action_type = int(action[i].cpu().numpy())
                 card_idx = int(card[i].cpu().numpy())
                 
@@ -423,7 +426,6 @@ if __name__ == "__main__":
                 "action_type": action_types,
                 "card_index": card_indices
             }
-            print("Executing environment step")
             next_obs, reward, terminations, truncations, infos = envs.step(env_actions)
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
@@ -435,8 +437,6 @@ if __name__ == "__main__":
                         print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
-            print("Step complete, moving to next step")
-
         print("Reached max rollout steps, calculating rewards and advantages")
         # bootstrap value if not done
         with torch.no_grad():
