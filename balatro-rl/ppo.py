@@ -14,7 +14,7 @@ from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 
 @dataclass
@@ -134,8 +134,22 @@ class Agent(nn.Module):
             nn.Linear(hidden_size, 1),
         )
 
-    def text_encode(self, texts: List[str]) -> torch.Tensor:
-        inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    def text_encode(self, texts) -> torch.Tensor:
+        if isinstance(texts, List) and len(texts) == 0:
+            # Handle empty list case
+            return None
+
+        if isinstance(texts, Tuple):
+            # If texts is a tuple of lists, we are tupling across the batch dimension, doing multiple rollouts in parallel
+            hiddens = [self.text_encode(text) for text in texts]
+            #impute None with a single zero vector
+            hiddens = [h if h is not None else torch.zeros((1, self.text_encoder.config.hidden_size), device=self.text_encoder.device) for h in hiddens]
+            # Stack the hidden states into
+            return torch.stack(hiddens, dim=0)
+        elif isinstance(texts, str):
+            texts = [texts]
+
+        inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512, is_split_into_words=False)
         inputs = {k: v.to(self.text_encoder.device) for k, v in inputs.items()}
         with torch.no_grad():
             outputs = self.text_encoder(**inputs, output_hidden_states=True)
@@ -150,8 +164,9 @@ class Agent(nn.Module):
     def get_action_and_value(self, observation: Dict[str, List[str]], lstm_hidden: Tuple[torch.Tensor, torch.Tensor], action=None, card=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         # Provide action and card fields in case of re-computation
         x = self.text_encode(observation["game_state_text"])
-        x, new_lstm_hidden = self.torso(x.unsqueeze(1), lstm_hidden) 
-        x = x.squeeze(1)
+        
+        x = x.view(-1, 1, x.size(-1))  # Add batch dimension for LSTM
+        x, new_lstm_hidden = self.torso(x, lstm_hidden)
 
         action_logits = self.actor(x)
         action_dist = Categorical(logits=action_logits)
@@ -163,35 +178,80 @@ class Agent(nn.Module):
         value = self.critic(x)
         
         # ---- POINTER NETWORK ----
-        # Handle empty card lists gracefully
+        # First, encode all cards with batching for efficiency
         card_sources = ["hand_cards", "jokers", "consumables", "shop_items", "boosters", "vouchers"]
-        all_embeds_list = []
-        card_counts = []
+        batch_size = x.size(0)
+        pointer_embed = self.pointer(x)  # [batch_size, embed_dim]
         
-        for source in card_sources:
-            if source in observation and len(observation[source]) > 0:
-                embeds = self.text_encode(observation[source])
-                all_embeds_list.append(embeds)
-                card_counts.append(len(observation[source]))
+        # Collect all card texts across all games and sources for batched encoding
+        all_card_texts = []
+        game_card_mappings = []  # Track which cards belong to which game
+        
+        for game_idx in range(batch_size):
+            # Get observation for this specific game
+            if isinstance(observation["game_state_text"], tuple):
+                # Multiple games: extract this game's observation
+                game_obs = {key: val[game_idx] if isinstance(val, (list, tuple)) else val 
+                           for key, val in observation.items()}
             else:
-                card_counts.append(0)
-        
-        if all_embeds_list:
-            all_embeds = torch.cat(all_embeds_list, dim=0)
-            pointer_embed = self.pointer(x)
-            # Batch matrix multiply: [batch_size, embed_dim] @ [num_cards, embed_dim].T
-            pointer_logits = torch.matmul(pointer_embed, all_embeds.T)
-            pointer_dist = Categorical(logits=pointer_logits)
+                # Single game: use observation directly  
+                game_obs = observation
             
-            if card is None:
-                card = pointer_dist.sample()
-            card_logprob = pointer_dist.log_prob(card)
-            cards_entropy = pointer_dist.entropy()
+            game_card_start = len(all_card_texts)
+            game_card_count = 0
+            
+            # Collect card texts for this game
+            for source in card_sources:
+                if source in game_obs and len(game_obs[source]) > 0:
+                    all_card_texts.extend(game_obs[source])
+                    game_card_count += len(game_obs[source])
+            
+            game_card_mappings.append((game_card_start, game_card_count))
+        
+        # Batch encode all card texts at once
+        if all_card_texts:
+            all_card_embeds = self.text_encode(all_card_texts)  # [total_cards, embed_dim]
         else:
-            # No cards available - create dummy outputs
-            card = torch.zeros_like(action)
-            card_logprob = torch.zeros_like(action_logprob)
-            cards_entropy = torch.zeros_like(actions_entropy)
+            all_card_embeds = None
+        
+        # Now process pointer network for each game separately
+        card_list = []
+        card_logprob_list = []
+        cards_entropy_list = []
+        
+        for game_idx in range(batch_size):
+            game_card_start, game_card_count = game_card_mappings[game_idx]
+            
+            if game_card_count > 0:
+                # Extract this game's card embeddings
+                game_card_embeds = all_card_embeds[game_card_start:game_card_start + game_card_count]
+                
+                # Compute pointer logits for this game
+                game_pointer_embed = pointer_embed[game_idx:game_idx+1]  # [1, embed_dim]
+                game_pointer_logits = torch.matmul(game_pointer_embed, game_card_embeds.T)  # [1, num_cards_this_game]
+                game_pointer_dist = Categorical(logits=game_pointer_logits)
+                
+                if card is None:
+                    game_card = game_pointer_dist.sample()
+                else:
+                    game_card = card[game_idx:game_idx+1]
+                
+                game_card_logprob = game_pointer_dist.log_prob(game_card)
+                game_cards_entropy = game_pointer_dist.entropy()
+            else:
+                # No cards available for this game
+                game_card = torch.zeros(1).to(x.device)
+                game_card_logprob = torch.zeros(1).to(x.device)
+                game_cards_entropy = torch.zeros(1).to(x.device)
+            
+            card_list.append(game_card)
+            card_logprob_list.append(game_card_logprob)
+            cards_entropy_list.append(game_cards_entropy)
+        
+        # Stack results back into batch format
+        card = torch.cat(card_list, dim=0)
+        card_logprob = torch.cat(card_logprob_list, dim=0)
+        cards_entropy = torch.cat(cards_entropy_list, dim=0)
 
         return value, action, action_logprob, actions_entropy, card, card_logprob, cards_entropy, new_lstm_hidden
 
