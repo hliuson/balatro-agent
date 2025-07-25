@@ -253,6 +253,16 @@ class Agent(nn.Module):
         card_logprob = torch.cat(card_logprob_list, dim=0)
         cards_entropy = torch.cat(cards_entropy_list, dim=0)
 
+        action = action.squeeze()  # Remove extra dimension
+        card = card.squeeze()  # Remove extra dimension
+        value = value.squeeze()  # Remove extra dimension
+
+        action_logprob = action_logprob.squeeze()  # Remove extra dimension
+        card_logprob = card_logprob.squeeze()  # Remove extra dimension
+
+        actions_entropy = actions_entropy.squeeze()  # Remove extra dimension
+        cards_entropy = cards_entropy.squeeze()  # Remove extra dimension
+
         return value, action, action_logprob, actions_entropy, card, card_logprob, cards_entropy, new_lstm_hidden
 
     def get_original_idx(self, card_index: int, observation: Dict[str, List[str]]) -> Tuple[str, int]:
@@ -361,7 +371,7 @@ if __name__ == "__main__":
                 value, action, action_logprob, _, card, card_logprob, _, new_lstm_hidden = agent.get_action_and_value(next_obs, lstm_hidden)
                 values[step] = value.flatten()
                 lstm_hidden = new_lstm_hidden
-            
+                
             actions[step] = action
             cards[step] = card
             action_logprobs[step] = action_logprob
