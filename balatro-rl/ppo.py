@@ -189,13 +189,14 @@ class Agent(nn.Module):
         
         for game_idx in range(batch_size):
             # Get observation for this specific game
-            if isinstance(observation["game_state_text"], tuple):
-                # Multiple games: extract this game's observation
-                game_obs = {key: val[game_idx] if isinstance(val, (list, tuple)) else val 
-                           for key, val in observation.items()}
-            else:
-                # Single game: use observation directly  
-                game_obs = observation
+            # For vectorized environments, observation values are lists/tuples
+            game_obs = {}
+            for key, val in observation.items():
+                if isinstance(val, (list, tuple)) and len(val) > game_idx:
+                    game_obs[key] = val[game_idx]
+                else:
+                    # Single game case or shared value
+                    game_obs[key] = val
             
             game_card_start = len(all_card_texts)
             game_card_count = 0
@@ -347,6 +348,7 @@ if __name__ == "__main__":
     next_done = torch.zeros(args.num_envs).to(device)
 
     for iteration in range(1, args.num_iterations + 1):
+        print(f"Iteration {iteration}/{args.num_iterations}, global_step={global_step}")
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
@@ -354,6 +356,7 @@ if __name__ == "__main__":
             optimizer.param_groups[0]["lr"] = lrnow
 
         for step in range(0, args.num_steps):
+            print(f"Step {step + 1}/{args.num_steps}, global_step={global_step}")
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
@@ -378,19 +381,26 @@ if __name__ == "__main__":
             card_logprobs[step] = card_logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            # Convert actions to environment format
-            env_actions = []
+            # Convert actions to environment format for vectorized environments
+            # For vectorized Dict action spaces, we need to structure as {"key": [val0, val1, ...]}
+            action_types = []
+            card_indices = []
+            
             for i in range(args.num_envs):
+                print(f"Processing environment {i + 1}/{args.num_envs}")
                 action_type = int(action[i].cpu().numpy())
                 card_idx = int(card[i].cpu().numpy())
                 
                 # Convert flat card index to (source, index_in_source) format
-                # Note: next_obs might be a list of dicts or a single dict depending on vectorization
-                if isinstance(next_obs, list):
-                    obs_for_env = next_obs[i]
-                else:
-                    obs_for_env = next_obs  # Single environment case
-                    
+                # For vectorized environments, next_obs is a dict where each value is a list
+                # Extract the observation for environment i
+                obs_for_env = {}
+                for key, val in next_obs.items():
+                    if isinstance(val, (list, tuple)) and len(val) > i:
+                        obs_for_env[key] = val[i]
+                    else:
+                        obs_for_env[key] = val
+                        
                 card_source_str, card_index_in_source = agent.get_original_idx(card_idx, obs_for_env)
                 
                 # Map string to CardSources enum value
@@ -404,13 +414,16 @@ if __name__ == "__main__":
                 }
                 card_source_value = source_mapping.get(card_source_str, 0)
                 
+                action_types.append(action_type + 1)  # Convert to 1-indexed for environment
                 # card_index_in_source is already 1-based from get_original_idx
-                env_action = {
-                    "action_type": action_type,
-                    "card_index": np.array([card_source_value, card_index_in_source], dtype=np.int32)
-                }
-                env_actions.append(env_action)
+                card_indices.append(np.array([card_source_value, card_index_in_source], dtype=np.int32))
             
+            # Structure actions for vectorized environment
+            env_actions = {
+                "action_type": action_types,
+                "card_index": card_indices
+            }
+            print("Executing environment step")
             next_obs, reward, terminations, truncations, infos = envs.step(env_actions)
             next_done = np.logical_or(terminations, truncations)
             rewards[step] = torch.tensor(reward).to(device).view(-1)
@@ -422,7 +435,9 @@ if __name__ == "__main__":
                         print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+            print("Step complete, moving to next step")
 
+        print("Reached max rollout steps, calculating rewards and advantages")
         # bootstrap value if not done
         with torch.no_grad():
             next_value = agent.get_value(next_obs, lstm_hidden).reshape(1, -1)
@@ -439,6 +454,7 @@ if __name__ == "__main__":
                 advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
             returns = advantages + values
 
+        print("Finished calculating advantages and returns")
         # flatten the batch - handle dict observations differently
         b_obs = [obs[i] for i in range(args.num_steps)]  # Keep as list of dicts
         b_obs = [item for sublist in b_obs for item in sublist]  # Flatten across num_envs
@@ -453,6 +469,7 @@ if __name__ == "__main__":
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
         clipfracs = []
+        print("Training model from replay buffer")
         for epoch in range(args.update_epochs):
             np.random.shuffle(b_inds)
             for start in range(0, args.batch_size, args.minibatch_size):
