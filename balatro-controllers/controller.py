@@ -487,6 +487,17 @@ def format_game_state(state) -> str:
         output.append("\n== Round Info ==")
         output.append(f"Chips: {round_info.get('chips', 0)}")
         output.append(f"Hands Left: {round_info.get('hands_left', 0)}, Discards Left: {round_info.get('discards_left', 0)}")
+        
+        # Display current selected hand information if available
+        if round_info.get("current_hand") and round_info["current_hand"].get("handname"):
+            current_hand = round_info["current_hand"]
+            hand_name = current_hand.get("handname", "")
+            hand_chips = current_hand.get("chips", 0)
+            hand_mult = current_hand.get("mult", 0)
+            hand_level = current_hand.get("level", 0)
+            
+            if hand_name:  # Only display if we have a valid hand name
+                output.append(f"Selected Hand: {hand_name} (Level {hand_level}) - {hand_chips} chips, {hand_mult} mult")
     if state.get("ante"):
         ante = state["ante"]
         blinds = ante["blinds"]

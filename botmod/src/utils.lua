@@ -384,6 +384,16 @@ function Utils.getRoundData()
         _current_round.hands_played_this_round = G.GAME.current_round.hands_played
         _current_round.discards_used_this_round = G.GAME.current_round.discards_used
         _current_round.blind_on_deck = G.GAME.blind_on_deck
+        
+        -- Add current hand information
+        if G.GAME.current_round.current_hand then
+            _current_round.current_hand = {
+                handname = G.GAME.current_round.current_hand.handname,
+                chips = G.GAME.current_round.current_hand.chips,
+                mult = G.GAME.current_round.current_hand.mult,
+                level = G.GAME.current_round.current_hand.level
+            }
+        end
     end
 
     return _current_round
