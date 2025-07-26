@@ -18,6 +18,61 @@ from typing import Any, Dict, List, Tuple, Union
 
 from tqdm import tqdm
 
+def unstack_dict_observations(obs_dict: Dict[str, Any], num_envs: int) -> List[Dict[str, Any]]:
+    """
+    Unstack a dict observation with vectorized values into a list of individual observations.
+    Transforms {k: [v0, v1, v2]} -> [{k: v0}, {k: v1}, {k: v2}]
+    """
+    if not obs_dict:
+        return []
+    
+    unstacked_obs = []
+    for env_idx in range(num_envs):
+        env_obs = {}
+        for key, val in obs_dict.items():
+            env_obs[key] = val[env_idx]
+        unstacked_obs.append(env_obs)
+    
+    return unstacked_obs
+
+def stack_dict_observations(obs_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Stack a list of dict observations into a single dict with stacked values.
+    Transforms [{k: v0}, {k: v1}, {k: v2}] -> {k: [v0, v1, v2]}
+    For tensors: stack them. For non-tensors: put them in lists.
+    """
+    if not obs_list:
+        return {}
+    
+    stacked_obs = {}
+    # Get all keys from the first observation
+    for key in obs_list[0].keys():
+        values = [obs[key] for obs in obs_list]
+        
+        # Check if all values are tensors
+        if all(isinstance(v, torch.Tensor) for v in values):
+            stacked_obs[key] = torch.stack(values, dim=0)
+        elif all(isinstance(v, np.ndarray) for v in values):
+            stacked_obs[key] = np.stack(values, axis=0)
+        elif key == "action_mask" and all(isinstance(v, (list, np.ndarray)) for v in values):
+            # Special handling for action_mask - stack as numpy array
+            stacked_obs[key] = np.stack(values, axis=0)
+        else:
+            # For non-tensors (strings, lists, etc.), just wrap in list
+            stacked_obs[key] = values
+    
+    return stacked_obs
+
+def flatten_dict_observations(obs_list: List[Dict[str, Any]], indices: np.ndarray) -> List[Dict[str, Any]]:
+    """
+    Extract observations at specific indices from a list of dict observations.
+    Returns a list of dict observations.
+    """
+    if not obs_list:
+        return []
+    
+    return [obs_list[i] for i in indices]
+
 @dataclass
 class Args:
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
@@ -30,7 +85,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
+    wandb_project_name: str = "balatro-rl"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -166,12 +221,18 @@ class Agent(nn.Module):
         # Provide action and card fields in case of re-computation
         x = self.text_encode(observation["game_state_text"])
         
-        x = x.view(-1, 1, x.size(-1))  # Add batch dimension for LSTM
+        x = x.view(-1, 1, x.size(-1))  # Add sequence dimension for LSTM
         x, new_lstm_hidden = self.torso(x, lstm_hidden)
 
-        action_logits = self.actor(x).squeeze()
+        action_logits = self.actor(x).squeeze(1)  # Remove sequence dimension only, keep batch dimension
+            
         action_masks = observation["action_mask"] 
-        mask_tensor = torch.tensor(action_masks, dtype=torch.bool, device=action_logits.device)
+        if isinstance(action_masks, torch.Tensor):
+            mask_tensor = action_masks.to(action_logits.device)
+        elif isinstance(action_masks, np.ndarray):
+            mask_tensor = torch.from_numpy(action_masks).bool().to(action_logits.device)
+        else:
+            mask_tensor = torch.tensor(action_masks, dtype=torch.bool, device=action_logits.device)
 
         action_logits = action_logits.masked_fill(~mask_tensor, -1e8)
 
@@ -181,7 +242,7 @@ class Agent(nn.Module):
         action_logprob = action_dist.log_prob(action)
         actions_entropy = action_dist.entropy()
 
-        value = self.critic(x)
+        value = self.critic(x).squeeze(1)  # Remove sequence dimension only, keep batch dimension
         
         # ---- POINTER NETWORK ----
         # First, encode all cards with batching for efficiency
@@ -353,14 +414,14 @@ if __name__ == "__main__":
     # For now, we'll assume it's properly formatted
     next_done = torch.zeros(args.num_envs).to(device)
 
-    for iteration in tqdm(range(1, args.num_iterations + 1)):
+    for iteration in tqdm(range(1, args.num_iterations + 1), desc="Training", unit="iter"):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
             lrnow = frac * args.learning_rate
             optimizer.param_groups[0]["lr"] = lrnow
 
-        for step in range(0, args.num_steps):
+        for step in tqdm(range(0, args.num_steps), desc=f"Rollout {iteration}", unit="step", leave=False):
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
@@ -456,8 +517,14 @@ if __name__ == "__main__":
 
         print("Finished calculating advantages and returns")
         # flatten the batch - handle dict observations differently
-        b_obs = [obs[i] for i in range(args.num_steps)]  # Keep as list of dicts
-        b_obs = [item for sublist in b_obs for item in sublist]  # Flatten across num_envs
+        # First, flatten the observations from (num_steps, num_envs) to (batch_size,)
+        b_obs = []
+        for step in range(args.num_steps):
+            step_obs = obs[step]  # This is a dict with vectorized values for all envs
+            # Unstack the vectorized observation into individual observations
+            individual_obs = unstack_dict_observations(step_obs, args.num_envs)
+            b_obs.extend(individual_obs)
+        
         b_action_logprobs = action_logprobs.reshape(-1)
         b_card_logprobs = card_logprobs.reshape(-1)
         b_actions = actions.reshape(-1)
@@ -476,8 +543,10 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                # Get batch of observations for minibatch
-                mb_obs = [b_obs[i] for i in mb_inds]
+                # Extract minibatch observations from the flattened observations 
+                mb_obs_list = flatten_dict_observations(b_obs, mb_inds)
+                # Stack the list of dict observations into a single dict for the agent
+                mb_obs = stack_dict_observations(mb_obs_list)
                 
                 # We need LSTM hidden states for training - reinitialize for each minibatch
                 mb_lstm_hidden = (
