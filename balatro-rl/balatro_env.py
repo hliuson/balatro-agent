@@ -67,8 +67,15 @@ class BalatroGymEnv(gym.Env):
             # card_index format: [CardSources.value, index_in_source]
         })
         
-        # Track previous ante for reward calculation
+        # Track previous ante and round for reward calculation
         self.prev_ante = 1
+        self.prev_round = 1
+        
+        # Track episode statistics
+        self.episode_reward = 0.0
+        self.episode_length = 0
+        self.failed_actions = 0
+        self.total_actions = 0
         
     def reset(self, seed=None, options=None):
         """Reset the environment to start a new episode"""
@@ -77,6 +84,13 @@ class BalatroGymEnv(gym.Env):
         # Start a new game using controller's restart_run method
         game_state = self.controller.restart_run()
         self.prev_ante = 1
+        self.prev_round = 1
+        
+        # Reset episode tracking
+        self.episode_reward = 0.0
+        self.episode_length = 0
+        self.failed_actions = 0
+        self.total_actions = 0
         
         # Get initial observation
         obs = self._get_observation()
@@ -125,8 +139,17 @@ class BalatroGymEnv(gym.Env):
         
         # Calculate reward
         current_ante = self._get_current_ante()
-        reward = self._calculate_reward(current_ante, action_valid)
+        current_round = self._get_current_round()
+        reward = self._calculate_reward(current_ante, current_round, action_valid)
         self.prev_ante = current_ante
+        self.prev_round = current_round
+        
+        # Update episode tracking
+        self.episode_reward += reward
+        self.episode_length += 1
+        self.total_actions += 1
+        if not action_valid:
+            self.failed_actions += 1
         
         # Check if episode is done
         done = self._is_done()
@@ -231,19 +254,31 @@ class BalatroGymEnv(gym.Env):
         }
         return action in card_actions
     
-    def _calculate_reward(self, current_ante: int, action_valid: bool) -> float:
-        """Calculate reward based on ante progression and action validity"""
+    def _calculate_reward(self, current_ante: int, current_round: int, action_valid: bool) -> float:
+        """Calculate reward based on ante/round progression and action validity"""
+        reward = 0.0
+        
         if current_ante > self.prev_ante:
-            return 1.0  # Reward for advancing ante
-        elif not action_valid:
-            return -0.01  # Small penalty for invalid actions
-        else:
-            return 0.0  # No reward otherwise
+            reward += 1.0  # Reward for advancing ante
+        
+        if current_round > self.prev_round:
+            reward += 0.1  # Small reward for advancing round
+        
+        if not action_valid:
+            reward -= 0.01  # Small penalty for invalid actions
+            
+        return reward
     
     def _get_current_ante(self) -> int:
         """Get current ante from game state"""
         if self.controller.G and self.controller.G.get("game"):
             return self.controller.G["game"].get("ante", 1)
+        return 1
+    
+    def _get_current_round(self) -> int:
+        """Get current round from game state"""
+        if self.controller.G and self.controller.G.get("game"):
+            return self.controller.G["game"].get("round", 1)
         return 1
     
     def _is_done(self) -> bool:
@@ -252,10 +287,25 @@ class BalatroGymEnv(gym.Env):
     
     def _get_info(self) -> Dict[str, Any]:
         """Get additional info about current state"""
-        return {
+        info = {
             "ante": self._get_current_ante(),
-            "valid_action": True  # Could be enhanced based on last action result
+            "round": self._get_current_round(),
+            "valid_action": True,  # Could be enhanced based on last action result
+            "failed_actions": self.failed_actions,
+            "total_actions": self.total_actions,
+            "failed_action_rate": self.failed_actions / max(1, self.total_actions)
         }
+        
+        # Add episode completion info if episode just ended
+        if self._is_done():
+            info["episode_complete"] = True
+            info["final_ante"] = self._get_current_ante()
+            info["final_round"] = self._get_current_round()
+            info["episode_failed_actions"] = self.failed_actions
+            info["episode_total_actions"] = self.total_actions
+            info["episode_failed_action_rate"] = self.failed_actions / max(1, self.total_actions)
+        
+        return info
     
     def close(self):
         """Clean up resources"""

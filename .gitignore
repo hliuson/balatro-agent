@@ -8,4 +8,5 @@ balatro
 **.claude
 balatro.love
 Balatro.exe
-balatro-rl/runs
+**/runs
+**/wandb
