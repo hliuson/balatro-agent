@@ -621,6 +621,7 @@ class BalatroControllerBase:
         verbose = False,
         policy_states = [],
         auto_start = True,
+        silence_lovely = True
     ):
         self.G = None
         self.port = get_available_port()
@@ -630,6 +631,7 @@ class BalatroControllerBase:
         self.verbose = verbose
         self.policy_states = policy_states
         self.first_run = True
+        self.silence_lovely = silence_lovely
 
         # State handlers are now expected to be populated by subclasses
         self.state_handlers = {}
@@ -790,9 +792,8 @@ class BalatroControllerBase:
         if self.verbose:
             print(f"Starting Balatro with command: {' '.join(cmd)}")
         
-        # Suppress output when not verbose
-        stdout = None if self.verbose else subprocess.DEVNULL
-        stderr = None if self.verbose else subprocess.DEVNULL
+        stdout = None if not self.silence_lovely else subprocess.DEVNULL
+        stderr = None if not self.silence_lovely else subprocess.DEVNULL
         
         self.balatro_instance = subprocess.Popen(
             cmd, 
