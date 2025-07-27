@@ -45,7 +45,7 @@ class BalatroGymEnv(gym.Env):
         super().__init__()
         
         # Initialize the Balatro controller
-        self.controller = TrainingBalatroController()
+        self.controller = TrainingBalatroController(verbose=True)
         self.controller.run_until_policy()
         
         # Define observation space
@@ -229,7 +229,8 @@ class BalatroGymEnv(gym.Env):
                 action_name = valid_action.get("action", "")
                 try:
                     action_enum = Actions[action_name]
-                    mask[action_enum.value] = 1
+                    #convert from 1-indexed to 0-indexed
+                    mask[action_enum.value-1] = 1
                 except (KeyError, AttributeError):
                     # Skip invalid action names
                     continue
@@ -255,14 +256,24 @@ class BalatroGymEnv(gym.Env):
         return action in card_actions
     
     def _calculate_reward(self, current_ante: int, current_round: int, action_valid: bool) -> float:
-        """Calculate reward based on ante/round progression and action validity"""
+        """Calculate reward based on scored chips as % of necessary chips to beat the round"""
         reward = 0.0
         
+        # Get current chips scored and chips required
+        current_chips = self._get_current_chips()
+        required_chips = self._get_required_chips()
+        
+        # Calculate chip percentage reward
+        if required_chips > 0:
+            chip_percentage = min(current_chips / required_chips, 1.0)  # Cap at 100%
+            reward += chip_percentage  # Reward ranges from 0 to 1 based on progress
+        
+        # Bonus rewards for progression
         if current_ante > self.prev_ante:
-            reward += 1.0  # Reward for advancing ante
+            reward += 1.0  # Bonus for advancing ante
         
         if current_round > self.prev_round:
-            reward += 0.1  # Small reward for advancing round
+            reward += 0.1  # Small bonus for advancing round
         
         if not action_valid:
             reward -= 0.01  # Small penalty for invalid actions
@@ -280,6 +291,20 @@ class BalatroGymEnv(gym.Env):
         if self.controller.G and self.controller.G.get("game"):
             return self.controller.G["game"].get("round", 1)
         return 1
+    
+    def _get_current_chips(self) -> int:
+        """Get current chips scored from game state"""
+        if self.controller.G and self.controller.G.get("round"):
+            return self.controller.G["round"].get("chips", 0)
+        return 0
+    
+    def _get_required_chips(self) -> int:
+        """Get required chips to pass current round from game state"""
+        if self.controller.G and self.controller.G.get("ante"):
+            ante = self.controller.G["ante"]
+            if ante.get("blinds") and ante["blinds"].get("current"):
+                return ante["blinds"]["current"].get("chips", 0)
+        return 0
     
     def _is_done(self) -> bool:
         """Check if episode is complete (game over)"""
