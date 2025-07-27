@@ -465,15 +465,12 @@ def format_game_state(state) -> str:
     output.append("== Game State ==")
     #json.dump(state, sys.stdout, indent=4)  # Print the raw state for debugging
     game_state_enum = State(state['state'])
-    if game_state_enum not in EXPECTED_STATE_COMPONENTS:
-        raise ValueError(f"Unexpected game state: {game_state_enum}. Expected components: {EXPECTED_STATE_COMPONENTS[game_state_enum]}")
+    if game_state_enum == State.SELECTING_HAND:
+        output.append("Current State: SELECTING_HAND. Play or discard cards.")
+    elif game_state_enum == State.SHOP:
+        output.append("Current State: SHOP. Buy cards, vouchers, or boosters. When done, use END_SHOP or REROLL_SHOP.")
     else:
-        if game_state_enum == State.SELECTING_HAND:
-            output.append("Current State: SELECTING_HAND. Play or discard cards.")
-        elif game_state_enum == State.SHOP:
-            output.append("Current State: SHOP. Buy cards, vouchers, or boosters. When done, use END_SHOP or REROLL_SHOP.")
-        else:
-            output.append(f"Current State: {game_state_enum.name}")
+        output.append(f"Current State: {game_state_enum.name}")
     if state.get("game"):
         game = state["game"]
         output.append("== Game Info ==")
