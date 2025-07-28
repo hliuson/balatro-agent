@@ -1440,7 +1440,7 @@ class TrainingBalatroController(BalatroControllerBase):
 
     def handle_menu(self, state):
         """Starts a new run from the main menu."""
-        return [Actions.START_RUN, 1, "Red Deck", "H8J6D1U", None]
+        return [Actions.START_RUN, 1, "Red Deck", self.random_seed(), None]
 
     def handle_blind_select(self, state):
         """Automatically selects the first available blind."""

@@ -277,9 +277,6 @@ class BalatroGymEnv(gym.Env):
         # Bonus rewards for progression
         if current_round > self.prev_round:
             reward = 1.0 - prev_chip_percent # Give the rest of the reward if we progressed to the next round
-
-        if not action_valid:
-            reward = -0.01  # Small penalty for invalid actions
             
         return reward
     
