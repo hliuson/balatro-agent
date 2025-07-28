@@ -265,19 +265,19 @@ class BalatroGymEnv(gym.Env):
         current_chips = self._get_current_chips()
         required_chips = self._get_required_chips()
         chip_progress = current_chips - self.prev_chips
+        prev_chip_percent = self.prev_chips / required_chips
 
         # Calculate chip percentage reward
-        if chip_progress > 0:
-            prev_chip_percent = self.prev_chips / required_chips
+        if chip_progress > 0: 
             chip_percentage = min(chip_progress / required_chips, 1.0 - prev_chip_percent) #cumulative chip reward over the round cannot exceed 1.0
             reward += chip_percentage  # Reward ranges from 0 to 1 based on progress
         
         # Bonus rewards for progression
-        if current_ante > self.prev_ante:
-            reward += 1.0  # Bonus for advancing ante
-        
+        if current_round > self.prev_round:
+            reward = 1.0 - prev_chip_percent # Give the rest of the reward if we progressed to the next round
+
         if not action_valid:
-            reward -= 0.01  # Small penalty for invalid actions
+            reward = -0.01  # Small penalty for invalid actions
             
         return reward
     
