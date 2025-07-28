@@ -76,6 +76,8 @@ class BalatroGymEnv(gym.Env):
         self.episode_length = 0
         self.failed_actions = 0
         self.total_actions = 0
+
+        self.render_mode = "rgb_array"  # Use RGB array for rendering
         
     def reset(self, seed=None, options=None):
         """Reset the environment to start a new episode"""
@@ -329,3 +331,9 @@ class BalatroGymEnv(gym.Env):
         """Clean up resources"""
         if hasattr(self.controller, 'close'):
             self.controller.close()
+    
+    def render(self):
+        return self._render_frame()
+
+    def _render_frame(self):
+        return self.controller.screenshot_np()

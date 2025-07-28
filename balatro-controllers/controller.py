@@ -12,6 +12,7 @@ import threading
 import socket
 import atexit
 import weakref
+import numpy as np
 
 _port_lock = threading.Lock()
 _used_ports = set()
@@ -637,6 +638,7 @@ class BalatroControllerBase:
         self.state_handlers[State.NEW_ROUND] = self.pass_action
         self.connected = False
         
+        self.display = None
         # Register for cleanup
         _active_controllers.add(self)
         
@@ -732,7 +734,7 @@ class BalatroControllerBase:
         if not hasattr(self, 'balatro_env') or self.balatro_env is None:
             self.balatro_env = os.environ.copy()
         self.balatro_env['DISPLAY'] = display
-        
+        self.display = display
         if self.verbose:
             print(f"Using virtual display: {display}")
 
@@ -1360,7 +1362,29 @@ class BalatroControllerBase:
                     print("✗ Action failed")
             except (KeyError, ValueError, IndexError) as e:
                 print(f"Invalid input: {e}")
-                print("Please try again.")        
+
+    def screenshot_np(self):
+        #take a screenshot using xvfb and xwd
+        if not self.display:
+            raise RuntimeError("Display not set. Call setup_display_for_linux() first.")
+        xwd_file = f"/tmp/balatro_screenshot_{self.display}.xwd"
+        png_file = f"/tmp/balatro_screenshot_{self.display}.png"
+        try:
+            subprocess.run(['xwd', '-root', '-display', self.display, '-out', xwd_file], check=True)
+            subprocess.run(['xwd', '-root', '-display', self.display, '-out', xwd_file], check=True)
+            subprocess.run(['convert', xwd_file, png_file], check=True)
+            
+            #use PIL to read the PNG file
+            from PIL import Image
+            img = Image.open(png_file)
+            img_np = np.array(img)
+            img.close()
+            # Clean up temporary files
+            os.remove(xwd_file)
+            os.remove(png_file)
+            return img_np
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to take screenshot: {e}")
 
 class BasicBalatroController(BalatroControllerBase):
     def __init__(self, verbose=False, auto_start=True):
