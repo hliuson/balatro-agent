@@ -45,7 +45,7 @@ class BalatroGymEnv(gym.Env):
         super().__init__()
         
         # Initialize the Balatro controller
-        self.controller = TrainingBalatroController(verbose=True)
+        self.controller = TrainingBalatroController(verbose=False)
         self.controller.run_until_policy()
         
         # Define observation space
@@ -85,6 +85,7 @@ class BalatroGymEnv(gym.Env):
         game_state = self.controller.restart_run()
         self.prev_ante = 1
         self.prev_round = 1
+        self.prev_chips = 0
         
         # Reset episode tracking
         self.episode_reward = 0.0
@@ -143,6 +144,7 @@ class BalatroGymEnv(gym.Env):
         reward = self._calculate_reward(current_ante, current_round, action_valid)
         self.prev_ante = current_ante
         self.prev_round = current_round
+        self.prev_chips = self._get_current_chips()
         
         # Update episode tracking
         self.episode_reward += reward
@@ -262,11 +264,14 @@ class BalatroGymEnv(gym.Env):
         # Get current chips scored and chips required
         current_chips = self._get_current_chips()
         required_chips = self._get_required_chips()
-        
+        chip_progress = current_chips - self.prev_chips
+
         # Calculate chip percentage reward
-        if required_chips > 0:
-            chip_percentage = min(current_chips / required_chips, 1.0)  # Cap at 100%
+        if chip_progress > 0:
+            prev_chip_percent = self.prev_chips / required_chips
+            chip_percentage = min(chip_progress / required_chips, 1.0 - prev_chip_percent) #cumulative chip reward over the round cannot exceed 1.0
             reward += chip_percentage  # Reward ranges from 0 to 1 based on progress
+            print(f"Hand played! Chips scored: {current_chips}, Required: {required_chips}, Progress: {chip_progress}, Reward: {reward}")
         
         # Bonus rewards for progression
         if current_ante > self.prev_ante:
@@ -294,17 +299,16 @@ class BalatroGymEnv(gym.Env):
     
     def _get_current_chips(self) -> int:
         """Get current chips scored from game state"""
-        if self.controller.G and self.controller.G.get("round"):
-            return self.controller.G["round"].get("chips", 0)
+        if self.controller.G.get("game"):
+            return self.controller.G["game"]["chips"]
         return 0
-    
+
     def _get_required_chips(self) -> int:
-        """Get required chips to pass current round from game state"""
-        if self.controller.G and self.controller.G.get("ante"):
+        if self.controller.G.get("ante"):
             ante = self.controller.G["ante"]
-            if ante.get("blinds") and ante["blinds"].get("current"):
-                return ante["blinds"]["current"].get("chips", 0)
-        return 0
+            return ante["blinds"]["current"]["chips"]
+        else:
+            return 1
     
     def _is_done(self) -> bool:
         """Check if episode is complete (game over)"""

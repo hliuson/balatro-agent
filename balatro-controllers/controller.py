@@ -476,8 +476,7 @@ def format_game_state(state) -> str:
         output.append("== Game Info ==")
         output.append(f"Round: {game.get('round', 0)}, Ante: {game.get('ante', 0)}")
         output.append(f"Money: ${game.get('dollars', 0)}")
-        if game.get('win_streak', 0) > 0:
-            output.append(f"Win Streak: {game['win_streak']}")
+        output.append(f"Chips: {game.get('chips', 0)}")
 
     if state.get("round"):
         round_info = state["round"]
