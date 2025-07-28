@@ -271,14 +271,10 @@ class BalatroGymEnv(gym.Env):
             prev_chip_percent = self.prev_chips / required_chips
             chip_percentage = min(chip_progress / required_chips, 1.0 - prev_chip_percent) #cumulative chip reward over the round cannot exceed 1.0
             reward += chip_percentage  # Reward ranges from 0 to 1 based on progress
-            print(f"Hand played! Chips scored: {current_chips}, Required: {required_chips}, Progress: {chip_progress}, Reward: {reward}")
         
         # Bonus rewards for progression
         if current_ante > self.prev_ante:
             reward += 1.0  # Bonus for advancing ante
-        
-        if current_round > self.prev_round:
-            reward += 0.1  # Small bonus for advancing round
         
         if not action_valid:
             reward -= 0.01  # Small penalty for invalid actions
@@ -325,14 +321,7 @@ class BalatroGymEnv(gym.Env):
             "failed_action_rate": self.failed_actions / max(1, self.total_actions)
         }
         
-        # Add episode completion info if episode just ended
-        if self._is_done():
-            info["episode_complete"] = True
-            info["final_ante"] = self._get_current_ante()
-            info["final_round"] = self._get_current_round()
-            info["episode_failed_actions"] = self.failed_actions
-            info["episode_total_actions"] = self.total_actions
-            info["episode_failed_action_rate"] = self.failed_actions / max(1, self.total_actions)
+        info["episode_return"] = self.episode_reward
         
         return info
     

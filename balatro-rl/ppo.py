@@ -492,12 +492,9 @@ if __name__ == "__main__":
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_done = torch.Tensor(next_done).to(device)
 
-            if "final_info" in infos:
-                for info in infos["final_info"]:
-                    if info and "episode" in info:
-                        print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
-                        writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
-                        writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+            for i in range(args.num_envs):
+                if terminations[i]:
+                    writer.add_scalar("charts/episodic_return", infos["episode_return"][i], global_step)
         print("Reached max rollout steps, calculating rewards and advantages")
         # bootstrap value if not done
         with torch.no_grad():
