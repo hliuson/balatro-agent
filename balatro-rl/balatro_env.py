@@ -18,6 +18,7 @@ from controller import (
     format_vouchers,
     format_game_state
 )
+from simple_curriculum import SimpleCurriculumEnv
 
 class CardSources(Enum):
     HAND = 0
@@ -38,11 +39,13 @@ ACTION_TO_SOURCE = {
     Actions.SELECT_BOOSTER_CARD: CardSources.BOOSTERCARD,
 }
 
-class BalatroGymEnv(gym.Env):
+class BalatroGymEnv(SimpleCurriculumEnv, gym.Env):
     """Minimal Balatro Gymnasium Environment using text observations"""
     
     def __init__(self):
-        super().__init__()
+        # Initialize SimpleCurriculumEnv first
+        SimpleCurriculumEnv.__init__(self)
+        gym.Env.__init__(self)
         
         # Initialize the Balatro controller
         self.controller = TrainingBalatroController(verbose=False)
@@ -70,6 +73,8 @@ class BalatroGymEnv(gym.Env):
         # Track previous ante and round for reward calculation
         self.prev_ante = 1
         self.prev_round = 1
+        self.prev_chips = 0
+        self.prev_state = None
         
         # Track episode statistics
         self.episode_reward = 0.0
@@ -88,12 +93,16 @@ class BalatroGymEnv(gym.Env):
         self.prev_ante = 1
         self.prev_round = 1
         self.prev_chips = 0
+        self.prev_state = None
         
         # Reset episode tracking
         self.episode_reward = 0.0
         self.episode_length = 0
         self.failed_actions = 0
         self.total_actions = 0
+        
+        # Reset curriculum rewards
+        self.reset_curriculum()
         
         # Get initial observation
         obs = self._get_observation()
@@ -103,6 +112,10 @@ class BalatroGymEnv(gym.Env):
     
     def step(self, action):
         """Execute one step in the environment"""
+        # Update curriculum state tracking before taking action
+        if self.controller.G:
+            self.update_curriculum_state(self.controller.G)
+        
         action_type = action["action_type"]
         card_index = action["card_index"]
         
@@ -140,13 +153,37 @@ class BalatroGymEnv(gym.Env):
         obs = self._get_observation()
         info = self._get_info()
         
-        # Calculate reward
+        # Calculate reward using curriculum manager
         current_ante = self._get_current_ante()
         current_round = self._get_current_round()
-        reward = self._calculate_reward(current_ante, current_round, action_valid)
+        current_chips = self._get_current_chips()
+        
+        episode_info = {
+            'ante': current_ante,
+            'round': current_round,
+            'prev_ante': self.prev_ante,
+            'prev_round': self.prev_round,
+            'chips': current_chips,
+            'prev_chips': self.prev_chips,
+            'episode_length': self.episode_length,
+            'total_actions': self.total_actions
+        }
+        
+        # Use curriculum reward system
+        current_state = self.controller.G
+        reward, reward_breakdown = self.calculate_curriculum_reward(
+            action=action,
+            current_state=current_state,
+            prev_state=self.prev_state or current_state,
+            episode_info=episode_info
+        )
+        self._last_reward_breakdown = reward_breakdown
+        
+        # Update tracking
         self.prev_ante = current_ante
         self.prev_round = current_round
-        self.prev_chips = self._get_current_chips()
+        self.prev_chips = current_chips
+        self.prev_state = current_state.copy() if current_state else None
         
         # Update episode tracking
         self.episode_reward += reward
@@ -260,25 +297,10 @@ class BalatroGymEnv(gym.Env):
         return action in card_actions
     
     def _calculate_reward(self, current_ante: int, current_round: int, action_valid: bool) -> float:
-        """Calculate reward based on scored chips as % of necessary chips to beat the round"""
-        reward = 0.0
-        
-        # Get current chips scored and chips required
-        current_chips = self._get_current_chips()
-        required_chips = self._get_required_chips()
-        chip_progress = current_chips - self.prev_chips
-        prev_chip_percent = self.prev_chips / required_chips
-
-        # Calculate chip percentage reward
-        if chip_progress > 0: 
-            chip_percentage = min(chip_progress / required_chips, 1.0 - prev_chip_percent) #cumulative chip reward over the round cannot exceed 1.0
-            reward += chip_percentage  # Reward ranges from 0 to 1 based on progress
-        
-        # Bonus rewards for progression
-        if current_round > self.prev_round:
-            reward = 1.0 - prev_chip_percent # Give the rest of the reward if we progressed to the next round
-            
-        return reward
+        """Legacy reward calculation - now handled by curriculum reward manager"""
+        # This method is kept for backward compatibility but should not be used
+        # All reward calculation is now done through self.reward_manager
+        return 0.0
     
     def _get_current_ante(self) -> int:
         """Get current ante from game state"""
@@ -321,6 +343,8 @@ class BalatroGymEnv(gym.Env):
         }
         
         info["episode_return"] = self.episode_reward
+        info["reward_breakdown"] = getattr(self, '_last_reward_breakdown', {})
+        info["reward_status"] = self.get_curriculum_status()
         
         return info
     
@@ -334,3 +358,27 @@ class BalatroGymEnv(gym.Env):
 
     def _render_frame(self):
         return self.controller.screenshot_np()
+    
+    # Curriculum learning methods (for backward compatibility)
+    def enable_reward(self, name: str):
+        """Enable a specific reward function"""
+        if name in self.rewards:
+            self.rewards[name].enabled = True
+    
+    def disable_reward(self, name: str):
+        """Disable a specific reward function"""
+        if name in self.rewards:
+            self.rewards[name].enabled = False
+    
+    def set_reward_weight(self, name: str, weight: float):
+        """Set weight for a specific reward function"""
+        if name in self.rewards:
+            self.rewards[name].weight = weight
+    
+    def get_reward_status(self):
+        """Get status of all reward functions"""
+        return self.get_curriculum_status()
+    
+    def get_reward_breakdown(self):
+        """Get breakdown of last reward calculation"""
+        return getattr(self, '_last_reward_breakdown', {})

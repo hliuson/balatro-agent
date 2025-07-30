@@ -17,6 +17,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Any, Dict, List, Tuple, Union
 
 from tqdm import tqdm
+# Curriculum is now self-managed by reward functions
 
 def unstack_dict_observations(obs_dict: Dict[str, Any], num_envs: int) -> List[Dict[str, Any]]:
     """
@@ -128,6 +129,18 @@ class Args:
     target_kl: float = None
     """the target KL divergence threshold"""
 
+    # Curriculum learning arguments
+    enable_curriculum: bool = True
+    """enable automatic curriculum learning"""
+    curriculum_window_size: int = 100
+    """window size for curriculum performance tracking"""
+    curriculum_success_threshold: float = 0.8
+    """success rate threshold to trigger reward phase-out"""
+    curriculum_phase_out_steps: int = 1000
+    """steps over which to gradually reduce reward weight"""
+    curriculum_min_episodes: int = 50
+    """minimum episodes before considering curriculum changes"""
+
     # to be filled in runtime
     batch_size: int = 0
     """the batch size (computed in runtime)"""
@@ -137,7 +150,7 @@ class Args:
     """the number of iterations (computed in runtime)"""
 
 
-def make_env(env_id, idx, capture_video, run_name):
+def make_env(env_id, idx, capture_video, run_name, curriculum_callback=None):
     def thunk():
         if env_id == "Balatro-v0":
             from balatro_env import BalatroGymEnv
@@ -147,6 +160,11 @@ def make_env(env_id, idx, capture_video, run_name):
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if capture_video and idx == 0:
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+        
+        # Apply curriculum callback if provided
+        if curriculum_callback and hasattr(env, 'enable_reward'):
+            curriculum_callback(env)
+        
         return env
 
     return thunk
@@ -378,9 +396,32 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
-    # env setup
+    # Initialize curriculum (self-managed by reward functions)
+    curriculum_callback = None
+    curriculum_envs = []
+    
+    if args.enable_curriculum:
+        # Create curriculum callback for environment initialization
+        def curriculum_callback(env):
+            """Initialize curriculum rewards for each environment"""
+            # Rewards self-manage, just enable cardcount to start
+            env.enable_reward("cardcount")
+            env.set_reward_weight("cardcount", 0.3)
+            env.set_reward_weight("main", 0.7)
+            # Store reference for logging
+            curriculum_envs.append(env)
+        
+        print("Curriculum learning enabled:")
+        print(f"  Self-managing rewards: cardcount -> bighand -> main only")
+        print(f"  Success threshold: {args.curriculum_success_threshold}")
+        print(f"  Phase-out steps: {args.curriculum_phase_out_steps}")
+        
+    else:
+        print("Curriculum learning disabled - using main reward only")
+
+    # env setup (curriculum_callback will be applied during make_env)
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
+        [make_env(args.env_id, i, args.capture_video, run_name, curriculum_callback) for i in range(args.num_envs)],
     )
 
     agent = Agent(envs).to(device)
@@ -494,7 +535,24 @@ if __name__ == "__main__":
 
             for i in range(args.num_envs):
                 if terminations[i]:
-                    writer.add_scalar("charts/episodic_return", infos["episode_return"][i], global_step)
+                    episode_return = infos["episode_return"][i]
+                    writer.add_scalar("charts/episodic_return", episode_return, global_step)
+                    
+                    # Log curriculum status (rewards self-manage)
+                    if args.enable_curriculum and curriculum_envs and infos.get("reward_breakdown"):
+                        # Get reference environment for logging
+                        ref_env = curriculum_envs[0] if curriculum_envs else None
+                        if ref_env:
+                            reward_status = ref_env.get_curriculum_status()
+                            
+                            # Log reward weights and status
+                            for reward_name, status in reward_status.items():
+                                writer.add_scalar(f"curriculum/weight_{reward_name}", status['weight'], global_step)
+                                writer.add_scalar(f"curriculum/enabled_{reward_name}", float(status['enabled']), global_step)
+                                writer.add_scalar(f"curriculum/success_rate_{reward_name}", status['success_rate'], global_step)
+                                
+                                if status['is_phasing_out']:
+                                    writer.add_scalar(f"curriculum/phase_out_progress_{reward_name}", status['phase_out_progress'], global_step)
         print("Reached max rollout steps, calculating rewards and advantages")
         # bootstrap value if not done
         with torch.no_grad():
@@ -621,6 +679,25 @@ if __name__ == "__main__":
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+        
+        # Log curriculum status at end of iteration
+        if args.enable_curriculum and curriculum_envs:
+            ref_env = curriculum_envs[0]
+            reward_status = ref_env.get_curriculum_status()
+            
+            print("Curriculum Status:")
+            for reward_name, status in reward_status.items():
+                if status['enabled']:
+                    phase_info = f" (phasing out: {status['phase_out_progress']:.1%})" if status['is_phasing_out'] else ""
+                    print(f"  {reward_name}: weight={status['weight']:.3f}, success={status['success_rate']:.2f}{phase_info}")
+        
+        # Log detailed reward breakdown if available
+        if infos.get("reward_breakdown"):
+            for i in range(args.num_envs):
+                if "reward_breakdown" in infos:
+                    breakdown = infos["reward_breakdown"][i]
+                    for reward_name, reward_value in breakdown.items():
+                        writer.add_scalar(f"rewards/{reward_name}", reward_value, global_step)
 
     envs.close()
     writer.close()
