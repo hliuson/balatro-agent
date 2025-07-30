@@ -17,10 +17,55 @@ from typing import Any, Dict, List, Tuple, Union
 
 from tqdm import tqdm
 
+def _unstack_nested_dict(nested_dict: Dict[str, Any], env_idx: int) -> Dict[str, Any]:
+    """Recursively unstack a nested dictionary at the given environment index."""
+    result = {}
+    for key, val in nested_dict.items():
+        if isinstance(val, dict):
+            # Recursively unstack nested dicts
+            result[key] = _unstack_nested_dict(val, env_idx)
+        elif isinstance(val, (list, tuple)) and len(val) > env_idx:
+            # Unstack lists/tuples at environment index
+            result[key] = val[env_idx]
+        else:
+            # Keep scalars or invalid indices as-is
+            result[key] = val
+    return result
+
+def _stack_nested_values(values: List[Any]) -> Any:
+    """Stack a list of values, handling nested dictionaries recursively."""
+    if not values:
+        return []
+    
+    first_val = values[0]
+    
+    # Handle nested dictionaries
+    if isinstance(first_val, dict):
+        stacked_dict = {}
+        for key in first_val.keys():
+            key_values = [val.get(key) for val in values if isinstance(val, dict)]
+            stacked_dict[key] = _stack_nested_values(key_values)
+        return stacked_dict
+    
+    # Handle tensors
+    elif all(isinstance(v, torch.Tensor) for v in values):
+        return torch.stack(values, dim=0)
+    
+    # Handle numpy arrays
+    elif all(isinstance(v, np.ndarray) for v in values):
+        return np.stack(values, axis=0)
+    
+    # For everything else (primitives, mixed types, etc.), just wrap in list
+    else:
+        return values
+
 def unstack_dict_observations(obs_dict: Dict[str, Any], num_envs: int) -> List[Dict[str, Any]]:
     """
     Unstack a dict observation with vectorized values into a list of individual observations.
-    Transforms {k: [v0, v1, v2]} -> [{k: v0}, {k: v1}, {k: v2}]
+    Handles nested dictionaries recursively.
+    
+    Example:
+    {a: [v1, v2], b: {c: [x1, x2]}} -> [{a: v1, b: {c: x1}}, {a: v2, b: {c: x2}}]
     """
     if not obs_dict:
         return []
@@ -29,7 +74,15 @@ def unstack_dict_observations(obs_dict: Dict[str, Any], num_envs: int) -> List[D
     for env_idx in range(num_envs):
         env_obs = {}
         for key, val in obs_dict.items():
-            env_obs[key] = val[env_idx]
+            if isinstance(val, dict):
+                # Handle nested dicts recursively
+                env_obs[key] = _unstack_nested_dict(val, env_idx)
+            elif isinstance(val, (list, tuple)) and len(val) > env_idx:
+                # Unstack at environment index
+                env_obs[key] = val[env_idx]
+            else:
+                # Keep scalars or invalid indices as-is
+                env_obs[key] = val
         unstacked_obs.append(env_obs)
     
     return unstacked_obs
@@ -37,8 +90,10 @@ def unstack_dict_observations(obs_dict: Dict[str, Any], num_envs: int) -> List[D
 def stack_dict_observations(obs_list: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Stack a list of dict observations into a single dict with stacked values.
-    Transforms [{k: v0}, {k: v1}, {k: v2}] -> {k: [v0, v1, v2]}
-    For tensors: stack them. For non-tensors: put them in lists.
+    Handles nested dictionaries recursively.
+    
+    Example:
+    [{a: v1, b: {c: x1}}, {a: v2, b: {c: x2}}] -> {a: [v1, v2], b: {c: [x1, x2]}}
     """
     if not obs_list:
         return {}
@@ -47,18 +102,7 @@ def stack_dict_observations(obs_list: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Get all keys from the first observation
     for key in obs_list[0].keys():
         values = [obs[key] for obs in obs_list]
-        
-        # Check if all values are tensors
-        if all(isinstance(v, torch.Tensor) for v in values):
-            stacked_obs[key] = torch.stack(values, dim=0)
-        elif all(isinstance(v, np.ndarray) for v in values):
-            stacked_obs[key] = np.stack(values, axis=0)
-        elif key == "action_mask" and all(isinstance(v, (list, np.ndarray)) for v in values):
-            # Special handling for action_mask - stack as numpy array
-            stacked_obs[key] = np.stack(values, axis=0)
-        else:
-            # For non-tensors (strings, lists, etc.), just wrap in list
-            stacked_obs[key] = values
+        stacked_obs[key] = _stack_nested_values(values)
     
     return stacked_obs
 
