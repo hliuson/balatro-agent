@@ -11,20 +11,18 @@ def create_test_observation():
     """Create a test observation with sample data."""
     return {
         "cards": np.array([
-            [2, 1, 3, 4, 0],  # Card 1: rank, suit, enhancement, seal, joker_id
-            [5, 2, 1, 0, 0],  # Card 2: rank, suit, enhancement, seal, joker_id
-            [0, 0, 0, 0, 1],  # Card 3: joker card with joker_id=1
-            [0, 0, 0, 0, 0],  # Padding
-            [0, 0, 0, 0, 0],  # Padding
+            [2, 1, 1, 0, 0, 0],  # Card 1: rank, suit, enhancement, seal, edition, joker_id
+            [5, 2, 2, 1, 1, 0],  # Card 2: rank, suit, enhancement, seal, edition, joker_id (foil gold card)
+            [0, 0, 0, 0, 2, 1],  # Card 3: joker card with holo edition, joker_id=1
         ], dtype=np.int32),
-        "card_types": np.array([0, 1, 2, 6, 6], dtype=np.int32),  # 6 is padding
+        "card_types": np.array([0, 0, 1], dtype=np.int32),  # hand, hand, joker
         "type_masks": {
-            "hand": np.array([1, 1, 0, 0, 0], dtype=np.int8),
-            "joker": np.array([0, 0, 1, 0, 0], dtype=np.int8),
-            "shop": np.array([0, 0, 0, 0, 0], dtype=np.int8),
-            "consumable": np.array([0, 0, 0, 0, 0], dtype=np.int8),
-            "booster": np.array([0, 0, 0, 0, 0], dtype=np.int8),
-            "voucher": np.array([0, 0, 0, 0, 0], dtype=np.int8),
+            "hand": np.array([1, 1, 0], dtype=np.int8),
+            "joker": np.array([0, 0, 1], dtype=np.int8),
+            "shop": np.array([0, 0, 0], dtype=np.int8),
+            "consumable": np.array([0, 0, 0], dtype=np.int8),
+            "booster": np.array([0, 0, 0], dtype=np.int8),
+            "voucher": np.array([0, 0, 0], dtype=np.int8),
         },
         "game_state": np.array([5, 2, 100], dtype=np.int32),  # ante, round, money
     }
@@ -35,10 +33,10 @@ def test_feature_encoder():
     
     # Create encoder
     encoder = BalatroFeatureEncoder(
-        card_dim=64,
+        card_dim=84,
         hidden_dim=128,
         num_transformer_layers=2,
-        num_attention_heads=4
+        num_attention_heads=12
     )
     
     # Create test observation
@@ -123,9 +121,34 @@ def test_card_feature_extractor():
     features = CardFeatureExtractor.extract_features(game_state)
     
     print("✓ Card feature extraction works")
-    print(f"  - Cards shape: {features['cards'].shape}")
+    print(f"  - Cards count: {len(features['cards'])}")
     print(f"  - Card types: {features['card_types']}")
     print(f"  - Game state: {features['game_state']}")
+    
+    # Convert to tensors for encoder testing
+    cards_tensor = torch.tensor(features['cards']).unsqueeze(0)
+    card_types_tensor = torch.tensor(features['card_types']).unsqueeze(0)
+    game_state_tensor = torch.tensor(features['game_state']).unsqueeze(0)
+    
+    type_masks_tensor = {}
+    for key, mask in features['type_masks'].items():
+        type_masks_tensor[key] = torch.tensor(mask).unsqueeze(0)
+    
+    # Test with the encoder
+    encoder = BalatroFeatureEncoder()
+    input_dict = {
+        "cards": cards_tensor,
+        "card_types": card_types_tensor,
+        "type_masks": type_masks_tensor,
+        "game_state": game_state_tensor
+    }
+    
+    with torch.no_grad():
+        output = encoder(input_dict)
+    
+    print("✓ CardFeatureExtractor works with encoder")
+    print(f"  - State embedding shape: {output['state_embed'].shape}")
+    print(f"  - Card embeddings shape: {output['card_embeddings'].shape}")
     
     return True
 
