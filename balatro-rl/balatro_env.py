@@ -48,9 +48,11 @@ class BalatroGymEnv(gym.Env):
         self.controller = TrainingBalatroController(verbose=False)
         self.controller.run_until_policy()
         
-        # Define observation space for raw game state
+        # Define observation space for tokenized features
         self.observation_space = spaces.Dict({
-            "raw_game_state": spaces.Dict({}),  # Raw dict from controller - flexible structure
+            "cards": spaces.Sequence(spaces.Box(low=0, high=np.inf, shape=(6,), dtype=np.int32)),  # Variable number of cards, each with 6 features
+            "source_types": spaces.Sequence(spaces.Discrete(6)),  # Source type IDs (0-5)
+            "game_state": spaces.Box(low=0, high=np.inf, shape=(3,), dtype=np.int32),  # [round, ante, dollars]
             "action_mask": spaces.Box(low=0, high=1, shape=(len(Actions),), dtype=np.int8),
         })
         
@@ -155,7 +157,7 @@ class BalatroGymEnv(gym.Env):
         return obs, reward, done, False, info
 
     def _get_observation(self) -> Dict[str, Any]:
-        """Get raw game state from controller"""
+        """Get tokenized observation ready for neural network"""
         game_state = self.controller.G
         if not game_state:
             # Return minimal empty game state
@@ -167,8 +169,27 @@ class BalatroGymEnv(gym.Env):
                 "game": {"round": 1, "ante": 1, "dollars": 0}
             }
         
+        # Tokenize the game state into tensors
+        from feature_encoder import CardFeatureExtractor
+        try:
+            features = CardFeatureExtractor.extract_features(game_state)
+            
+            # Convert to numpy arrays (gymnasium expects numpy, not torch tensors)
+            cards = np.array(features["cards"], dtype=np.int32) if features["cards"] else np.empty((0, 6), dtype=np.int32)
+            source_types = np.array(features["source_types"], dtype=np.int32) if features["source_types"] else np.empty((0,), dtype=np.int32)
+            game_state_arr = np.array(features["game_state"], dtype=np.int32)
+            
+        except Exception as e:
+            print(f"Warning: Feature extraction failed: {e}")
+            # Fallback to empty arrays
+            cards = np.empty((0, 6), dtype=np.int32)
+            source_types = np.empty((0,), dtype=np.int32)
+            game_state_arr = np.array([1, 1, 0], dtype=np.int32)  # default game state
+        
         return {
-            "raw_game_state": game_state,
+            "cards": cards,
+            "source_types": source_types,
+            "game_state": game_state_arr,
             "action_mask": self._get_action_mask(game_state)
         }
     

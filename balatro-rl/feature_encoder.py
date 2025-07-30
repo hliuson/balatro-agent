@@ -59,8 +59,6 @@ class BalatroFeatureEncoder(nn.Module):
         observation: Dict containing:
             - 'cards': Tensor [batch_size, num_cards, 6] 
                        Features: [rank, suit, enhancement, seal, edition, joker_id]
-            - 'card_types': Tensor [batch_size, num_cards] 
-                           Card type IDs (0=hand, 1=joker, 2=consumable, etc.)
             - 'source_types': Tensor [batch_size, num_cards]
                              Source IDs (0=hand, 1=joker, 2=consumable, 3=shop, 4=booster, 5=voucher)
             - 'game_state': Tensor [batch_size, 3] with [round, ante, dollars]
@@ -69,7 +67,6 @@ class BalatroFeatureEncoder(nn.Module):
         Dict containing:
             - 'state_embed': Tensor [batch_size, hidden_dim * 7] (6 sources + game state)
             - 'card_embeddings': Tensor [batch_size, num_cards, card_dim] for pointer network
-            - 'card_types': Pass-through of input card_types
             - 'source_types': Pass-through of input source_types
     """
     
@@ -93,8 +90,8 @@ class BalatroFeatureEncoder(nn.Module):
         # Joker embeddings
         self.joker_embed = nn.Embedding(VOCAB_SIZES['jokers'], card_dim // 6)
         
-        # Card type embeddings (distinguish hand/joker/shop/etc)
-        self.card_type_embed = nn.Embedding(7, card_dim // 6)  # 0-6=card sources
+        # Source type embeddings (distinguish hand/joker/shop/etc)
+        self.source_type_embed = nn.Embedding(6, card_dim // 6)  # 0-5=source types
         
         # Note: Game state scalars are handled directly in game_encoder
         
@@ -132,16 +129,14 @@ class BalatroFeatureEncoder(nn.Module):
         Args:
             observation: Dict containing:
                 - 'cards': Tensor of shape [batch_size, max_cards, 6] with card features [rank, suit, enhancement, seal, edition, joker_id]
-                - 'card_types': Tensor of shape [batch_size, max_cards] with card types
-                - 'type_masks': Dict of masks for each card type
+                - 'source_types': Tensor of shape [batch_size, max_cards] with source types
                 - 'game_state': Tensor of shape [batch_size, 3] with game features
         
         Returns:
             Dict containing:
-                - 'state_embed': Pooled state representation [batch_size, hidden_dim * 6 + hidden_dim]
+                - 'state_embed': Pooled state representation [batch_size, hidden_dim * 7]
                 - 'card_embeddings': Individual card embeddings [batch_size, max_cards, card_dim]
-                - 'card_types': Card type information
-                - 'type_masks': Type masks for pooling
+                - 'source_types': Source type information
         """
         batch_size = observation['cards'].size(0)
         max_cards = observation['cards'].size(1)
@@ -149,7 +144,7 @@ class BalatroFeatureEncoder(nn.Module):
         # Encode individual card features
         card_features = self._encode_cards(
             observation['cards'], 
-            observation['card_types']
+            observation['source_types']
         )  # [batch_size, max_cards, card_dim]
         
         # Apply transformer for cross-component attention
@@ -178,14 +173,13 @@ class BalatroFeatureEncoder(nn.Module):
         return {
             'state_embed': state_embed,
             'card_embeddings': attended_cards,
-            'card_types': observation['card_types'],
             'source_types': observation['source_types']
         }
     
-    def _encode_cards(self, cards: torch.Tensor, card_types: torch.Tensor) -> torch.Tensor:
+    def _encode_cards(self, cards: torch.Tensor, source_types: torch.Tensor) -> torch.Tensor:
         """Encode individual card features into dense representations."""
         # cards: [batch_size, max_cards, 6] - [rank, suit, enhancement, seal, edition, joker_id]
-        # card_types: [batch_size, max_cards] - card type indices
+        # source_types: [batch_size, max_cards] - source type indices
         
         batch_size, max_cards, _ = cards.shape
         
@@ -204,11 +198,11 @@ class BalatroFeatureEncoder(nn.Module):
         seal_embed = self.seal_embed(seals)
         edition_embed = self.edition_embed(editions)
         joker_embed = self.joker_embed(joker_ids)
-        type_embed = self.card_type_embed(card_types)
+        source_embed = self.source_type_embed(source_types)
         
         # Concatenate all embeddings
         card_features = torch.cat([
-            rank_embed, suit_embed, enhancement_embed, seal_embed, edition_embed, joker_embed, type_embed
+            rank_embed, suit_embed, enhancement_embed, seal_embed, edition_embed, joker_embed, source_embed
         ], dim=-1)  # [batch_size, max_cards, card_dim]
         
         return card_features
@@ -339,8 +333,7 @@ class CardFeatureExtractor:
     Input: Raw game state dict from controller with keys like 'hand', 'jokers', 'shop', etc.
     Output: Dict ready for BalatroFeatureEncoder with keys:
         - 'cards': List of [rank, suit, enhancement, seal, edition, joker_id] features
-        - 'card_types': List of card type IDs 
-        - 'source_types': List of source IDs (0=hand, 1=joker, 2=consumable, 3=shop)
+        - 'source_types': List of source IDs (0=hand, 1=joker, 2=consumable, 3=shop, 4=booster, 5=voucher)
         - 'game_state': List of [round, ante, dollars]
     """
     
@@ -365,16 +358,14 @@ class CardFeatureExtractor:
         
         features = {
             'cards': [],
-            'card_types': [],
             'source_types': [],  # Single integer: 0=hand, 1=joker, 2=consumable, 3=shop, 4=booster, 5=voucher
             'game_state': [game['round'], game['ante'], game['dollars']]
         }
         
         # Helper to add item with source type
         def add_item(item, source_type):
-            item_features, card_type = extract_item_features(item)
+            item_features, _ = extract_item_features(item)  # Ignore card_type, only need source
             features['cards'].append(item_features)
-            features['card_types'].append(card_type)
             
             # Map source type to integer
             source_map = {'hand': 0, 'joker': 1, 'consumable': 2, 'shop': 3, 'booster': 4, 'voucher': 5}

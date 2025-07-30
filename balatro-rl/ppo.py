@@ -260,32 +260,23 @@ class Agent(nn.Module):
         )
 
     def encode_observation(self, observation: Dict[str, Any]) -> Dict[str, torch.Tensor]:
-        """Encode raw game state observation using feature encoder."""
-        from feature_encoder import CardFeatureExtractor
-        
-        # Extract structured features from raw game state
-        raw_game_state = observation["raw_game_state"]
-        features = CardFeatureExtractor.extract_features(raw_game_state)
-        
-        # Convert to tensors
+        """Encode tokenized observation using feature encoder."""
         device = next(self.parameters()).device
         
-        cards = torch.tensor(features["cards"], dtype=torch.int32).to(device)
-        card_types = torch.tensor(features["card_types"], dtype=torch.int32).to(device)
-        source_types = torch.tensor(features["source_types"], dtype=torch.int32).to(device)
-        game_state = torch.tensor(features["game_state"], dtype=torch.int32).to(device)
+        # Convert numpy arrays to tensors
+        cards = torch.tensor(observation["cards"], dtype=torch.int32).to(device)
+        source_types = torch.tensor(observation["source_types"], dtype=torch.int32).to(device)
+        game_state = torch.tensor(observation["game_state"], dtype=torch.int32).to(device)
         
         # Create batch dimension if needed
         if cards.dim() == 2:
             cards = cards.unsqueeze(0)
-            card_types = card_types.unsqueeze(0)
             source_types = source_types.unsqueeze(0)
             game_state = game_state.unsqueeze(0)
         
         # Encode using feature encoder
         encoded = self.feature_encoder({
             "cards": cards,
-            "card_types": card_types,
             "source_types": source_types,
             "game_state": game_state
         })
@@ -338,8 +329,9 @@ class Agent(nn.Module):
             # Flatten card embeddings for batch processing
             pointer_logits = torch.matmul(pointer_query, card_embeddings.transpose(1, 2))  # [batch_size, max_cards]
             
-            # Create mask for valid cards (non-padding)
-            valid_mask = (encoded["card_types"] != 6)  # 6 is padding type
+            # Create mask for valid cards (we don't have padding now, so all cards are valid)
+            # If we ever need padding later, we can check source_types or card features
+            valid_mask = torch.ones(batch_size, max_cards, dtype=torch.bool, device=x.device)
             pointer_logits = pointer_logits.masked_fill(~valid_mask, -1e8)
             
             pointer_dist = Categorical(logits=pointer_logits)
@@ -366,19 +358,22 @@ class Agent(nn.Module):
 
     def get_original_idx(self, card_index: int, observation: Dict[str, Any]) -> Tuple[str, int]:
         """Map flat card index back to original source and index."""
-        # Count total cards across all sources to find the original
-        sources = ["hand", "joker", "consumable", "shop", "booster", "voucher"]
-        source_names = ["hand_cards", "jokers", "consumables", "shop_items", "boosters", "vouchers"]
+        # Use source_types to determine card sources
+        source_types = observation["source_types"]
         
-        current_idx = 0
-        for source_idx, (source, source_name) in enumerate(zip(sources, source_names)):
-            mask = observation["type_masks"][source]
-            count = int(np.sum(mask))
-            if card_index < current_idx + count:
-                return source_name, card_index - current_idx + 1  # 1-based index
-            current_idx += count
+        if card_index >= len(source_types):
+            return "hand", 1  # Fallback
+            
+        source_id = source_types[card_index]
         
-        return "hand_cards", 1  # Fallback
+        # Count cards of this source type before this index
+        cards_before = np.sum(source_types[:card_index] == source_id)
+        
+        # Map source ID to source name
+        source_map = {0: "hand", 1: "joker", 2: "consumable", 3: "shop", 4: "booster", 5: "voucher"}
+        source_name = source_map.get(source_id, "hand")
+        
+        return source_name, cards_before + 1  # 1-based index
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
