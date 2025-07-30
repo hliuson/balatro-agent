@@ -45,7 +45,7 @@ class BalatroGymEnv(gym.Env):
         super().__init__()
         
         # Initialize the Balatro controller
-        self.controller = TrainingBalatroController()
+        self.controller = TrainingBalatroController(verbose=False)
         self.controller.run_until_policy()
         
         # Define observation space
@@ -76,6 +76,8 @@ class BalatroGymEnv(gym.Env):
         self.episode_length = 0
         self.failed_actions = 0
         self.total_actions = 0
+
+        self.render_mode = "rgb_array"  # Use RGB array for rendering
         
     def reset(self, seed=None, options=None):
         """Reset the environment to start a new episode"""
@@ -85,6 +87,7 @@ class BalatroGymEnv(gym.Env):
         game_state = self.controller.restart_run()
         self.prev_ante = 1
         self.prev_round = 1
+        self.prev_chips = 0
         
         # Reset episode tracking
         self.episode_reward = 0.0
@@ -143,6 +146,7 @@ class BalatroGymEnv(gym.Env):
         reward = self._calculate_reward(current_ante, current_round, action_valid)
         self.prev_ante = current_ante
         self.prev_round = current_round
+        self.prev_chips = self._get_current_chips()
         
         # Update episode tracking
         self.episode_reward += reward
@@ -229,7 +233,8 @@ class BalatroGymEnv(gym.Env):
                 action_name = valid_action.get("action", "")
                 try:
                     action_enum = Actions[action_name]
-                    mask[action_enum.value] = 1
+                    #convert from 1-indexed to 0-indexed
+                    mask[action_enum.value-1] = 1
                 except (KeyError, AttributeError):
                     # Skip invalid action names
                     continue
@@ -255,17 +260,23 @@ class BalatroGymEnv(gym.Env):
         return action in card_actions
     
     def _calculate_reward(self, current_ante: int, current_round: int, action_valid: bool) -> float:
-        """Calculate reward based on ante/round progression and action validity"""
+        """Calculate reward based on scored chips as % of necessary chips to beat the round"""
         reward = 0.0
         
-        if current_ante > self.prev_ante:
-            reward += 1.0  # Reward for advancing ante
+        # Get current chips scored and chips required
+        current_chips = self._get_current_chips()
+        required_chips = self._get_required_chips()
+        chip_progress = current_chips - self.prev_chips
+        prev_chip_percent = self.prev_chips / required_chips
+
+        # Calculate chip percentage reward
+        if chip_progress > 0: 
+            chip_percentage = min(chip_progress / required_chips, 1.0 - prev_chip_percent) #cumulative chip reward over the round cannot exceed 1.0
+            reward += chip_percentage  # Reward ranges from 0 to 1 based on progress
         
+        # Bonus rewards for progression
         if current_round > self.prev_round:
-            reward += 0.1  # Small reward for advancing round
-        
-        if not action_valid:
-            reward -= 0.01  # Small penalty for invalid actions
+            reward = 1.0 - prev_chip_percent # Give the rest of the reward if we progressed to the next round
             
         return reward
     
@@ -280,6 +291,19 @@ class BalatroGymEnv(gym.Env):
         if self.controller.G and self.controller.G.get("game"):
             return self.controller.G["game"].get("round", 1)
         return 1
+    
+    def _get_current_chips(self) -> int:
+        """Get current chips scored from game state"""
+        if self.controller.G.get("game"):
+            return self.controller.G["game"]["chips"]
+        return 0
+
+    def _get_required_chips(self) -> int:
+        if self.controller.G.get("ante"):
+            ante = self.controller.G["ante"]
+            return ante["blinds"]["current"]["chips"]
+        else:
+            return 1
     
     def _is_done(self) -> bool:
         """Check if episode is complete (game over)"""
@@ -296,14 +320,7 @@ class BalatroGymEnv(gym.Env):
             "failed_action_rate": self.failed_actions / max(1, self.total_actions)
         }
         
-        # Add episode completion info if episode just ended
-        if self._is_done():
-            info["episode_complete"] = True
-            info["final_ante"] = self._get_current_ante()
-            info["final_round"] = self._get_current_round()
-            info["episode_failed_actions"] = self.failed_actions
-            info["episode_total_actions"] = self.total_actions
-            info["episode_failed_action_rate"] = self.failed_actions / max(1, self.total_actions)
+        info["episode_return"] = self.episode_reward
         
         return info
     
@@ -311,3 +328,9 @@ class BalatroGymEnv(gym.Env):
         """Clean up resources"""
         if hasattr(self.controller, 'close'):
             self.controller.close()
+    
+    def render(self):
+        return self._render_frame()
+
+    def _render_frame(self):
+        return self.controller.screenshot_np()

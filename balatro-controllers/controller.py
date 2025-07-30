@@ -12,6 +12,7 @@ import threading
 import socket
 import atexit
 import weakref
+import numpy as np
 
 _port_lock = threading.Lock()
 _used_ports = set()
@@ -465,22 +466,18 @@ def format_game_state(state) -> str:
     output.append("== Game State ==")
     #json.dump(state, sys.stdout, indent=4)  # Print the raw state for debugging
     game_state_enum = State(state['state'])
-    if game_state_enum not in EXPECTED_STATE_COMPONENTS:
-        raise ValueError(f"Unexpected game state: {game_state_enum}. Expected components: {EXPECTED_STATE_COMPONENTS[game_state_enum]}")
+    if game_state_enum == State.SELECTING_HAND:
+        output.append("Current State: SELECTING_HAND. Play or discard cards.")
+    elif game_state_enum == State.SHOP:
+        output.append("Current State: SHOP. Buy cards, vouchers, or boosters. When done, use END_SHOP or REROLL_SHOP.")
     else:
-        if game_state_enum == State.SELECTING_HAND:
-            output.append("Current State: SELECTING_HAND. Play or discard cards.")
-        elif game_state_enum == State.SHOP:
-            output.append("Current State: SHOP. Buy cards, vouchers, or boosters. When done, use END_SHOP or REROLL_SHOP.")
-        else:
-            output.append(f"Current State: {game_state_enum.name}")
+        output.append(f"Current State: {game_state_enum.name}")
     if state.get("game"):
         game = state["game"]
         output.append("== Game Info ==")
         output.append(f"Round: {game.get('round', 0)}, Ante: {game.get('ante', 0)}")
         output.append(f"Money: ${game.get('dollars', 0)}")
-        if game.get('win_streak', 0) > 0:
-            output.append(f"Win Streak: {game['win_streak']}")
+        output.append(f"Chips: {game.get('chips', 0)}")
 
     if state.get("round"):
         round_info = state["round"]
@@ -641,6 +638,7 @@ class BalatroControllerBase:
         self.state_handlers[State.NEW_ROUND] = self.pass_action
         self.connected = False
         
+        self.display = None
         # Register for cleanup
         _active_controllers.add(self)
         
@@ -736,7 +734,7 @@ class BalatroControllerBase:
         if not hasattr(self, 'balatro_env') or self.balatro_env is None:
             self.balatro_env = os.environ.copy()
         self.balatro_env['DISPLAY'] = display
-        
+        self.display = display
         if self.verbose:
             print(f"Using virtual display: {display}")
 
@@ -1364,7 +1362,29 @@ class BalatroControllerBase:
                     print("✗ Action failed")
             except (KeyError, ValueError, IndexError) as e:
                 print(f"Invalid input: {e}")
-                print("Please try again.")        
+
+    def screenshot_np(self):
+        #take a screenshot using xvfb and xwd
+        if not self.display:
+            raise RuntimeError("Display not set. Call setup_display_for_linux() first.")
+        xwd_file = f"/tmp/balatro_screenshot_{self.display}.xwd"
+        png_file = f"/tmp/balatro_screenshot_{self.display}.png"
+        try:
+            subprocess.run(['xwd', '-root', '-display', self.display, '-out', xwd_file], check=True)
+            subprocess.run(['xwd', '-root', '-display', self.display, '-out', xwd_file], check=True)
+            subprocess.run(['convert', xwd_file, png_file], check=True)
+            
+            #use PIL to read the PNG file
+            from PIL import Image
+            img = Image.open(png_file)
+            img_np = np.array(img)
+            img.close()
+            # Clean up temporary files
+            os.remove(xwd_file)
+            os.remove(png_file)
+            return img_np
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to take screenshot: {e}")
 
 class BasicBalatroController(BalatroControllerBase):
     def __init__(self, verbose=False, auto_start=True):
@@ -1420,7 +1440,7 @@ class TrainingBalatroController(BalatroControllerBase):
 
     def handle_menu(self, state):
         """Starts a new run from the main menu."""
-        return [Actions.START_RUN, 1, "Red Deck", "H8J6D1U", None]
+        return [Actions.START_RUN, 1, "Red Deck", self.random_seed(), None]
 
     def handle_blind_select(self, state):
         """Automatically selects the first available blind."""
