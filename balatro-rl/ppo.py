@@ -156,6 +156,11 @@ class Agent(nn.Module):
     def __init__(self, envs, model="Qwen/Qwen3-0.6B", hidden_size=512, lstm_layers=2):
         super().__init__()
         self.text_encoder = AutoModelForCausalLM.from_pretrained(model)
+        #freeze the text encoder parameters
+        for param in self.text_encoder.parameters():
+            param.requires_grad = False
+        # Set the text encoder to evaluation mode
+        self.text_encoder.eval()
         self.tokenizer = AutoTokenizer.from_pretrained(model)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -174,18 +179,21 @@ class Agent(nn.Module):
             
         self.actor = nn.Sequential( #select action
             nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, num_actions),
         )
 
         self.pointer = nn.Sequential( #select card
             nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, self.text_encoder.config.hidden_size),
         )
 
         self.critic = nn.Sequential( #estimate value
             nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, 1),
         )
