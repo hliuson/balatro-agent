@@ -13,7 +13,6 @@ import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Any, Dict, List, Tuple, Union
 
 from tqdm import tqdm
@@ -153,18 +152,28 @@ def make_env(env_id, idx, capture_video, run_name):
 
 
 class Agent(nn.Module):
-    def __init__(self, envs, model="Qwen/Qwen3-0.6B", hidden_size=512, lstm_layers=2):
+    def __init__(self, envs, card_dim=64, hidden_size=512, lstm_layers=2):
         super().__init__()
-        self.text_encoder = AutoModelForCausalLM.from_pretrained(model)
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        
+        # Feature encoder for structured observations
+        from feature_encoder import BalatroFeatureEncoder
+        self.feature_encoder = BalatroFeatureEncoder(
+            card_dim=card_dim,
+            hidden_dim=hidden_size,
+            num_transformer_layers=3,
+            num_attention_heads=8
+        )
+        
+        # Calculate input size: 6 component types * hidden_size + game_state_hidden
+        encoder_output_size = hidden_size * 6 + hidden_size
+        
         self.torso = nn.LSTM(
-            input_size=self.text_encoder.config.hidden_size,
+            input_size=encoder_output_size,
             hidden_size=hidden_size,
             num_layers=lstm_layers,
             batch_first=True,
-            dropout=0.0,)
+            dropout=0.0,
+        )
         
         # For Dict action space, get the number of discrete actions from action_type
         if isinstance(envs.single_action_space, gym.spaces.Dict):
@@ -172,61 +181,71 @@ class Agent(nn.Module):
         else:
             num_actions = envs.single_action_space.n
             
-        self.actor = nn.Sequential( #select action
+        self.actor = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, num_actions),
         )
 
-        self.pointer = nn.Sequential( #select card
+        # Pointer network for card selection - uses card embeddings directly
+        self.pointer = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, self.text_encoder.config.hidden_size),
+            nn.Linear(hidden_size, card_dim),  # Match card embedding dimension
         )
 
-        self.critic = nn.Sequential( #estimate value
+        self.critic = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, 1),
         )
 
-    def text_encode(self, texts) -> torch.Tensor:
-        if isinstance(texts, List) and len(texts) == 0:
-            # Handle empty list case
-            return None
+    def encode_observation(self, observation: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        """Encode structured observation using feature encoder."""
+        # Convert numpy arrays to tensors
+        device = next(self.parameters()).device
+        
+        cards = torch.from_numpy(observation["cards"]).to(device)
+        card_types = torch.from_numpy(observation["card_types"]).to(device)
+        game_state = torch.from_numpy(observation["game_state"]).to(device)
+        
+        type_masks = {}
+        for key, mask in observation["type_masks"].items():
+            type_masks[key] = torch.from_numpy(np.array(mask)).to(device)
+        
+        # Create batch dimension if needed
+        if cards.dim() == 2:
+            cards = cards.unsqueeze(0)
+            card_types = card_types.unsqueeze(0)
+            game_state = game_state.unsqueeze(0)
+            for key in type_masks:
+                type_masks[key] = type_masks[key].unsqueeze(0)
+        
+        # Encode using feature encoder
+        encoded = self.feature_encoder({
+            "cards": cards,
+            "card_types": card_types,
+            "type_masks": type_masks,
+            "game_state": game_state
+        })
+        
+        return encoded
 
-        if isinstance(texts, Tuple):
-            # If texts is a tuple of lists, we are tupling across the batch dimension, doing multiple rollouts in parallel
-            hiddens = [self.text_encode(text) for text in texts]
-            #impute None with a single zero vector
-            hiddens = [h if h is not None else torch.zeros((1, self.text_encoder.config.hidden_size), device=self.text_encoder.device) for h in hiddens]
-            # Stack the hidden states into
-            return torch.stack(hiddens, dim=0)
-        elif isinstance(texts, str):
-            texts = [texts]
-
-        inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512, is_split_into_words=False)
-        inputs = {k: v.to(self.text_encoder.device) for k, v in inputs.items()}
-        with torch.no_grad():
-            outputs = self.text_encoder(**inputs, output_hidden_states=True)
-        return outputs.hidden_states[-1][:, -1, :]  # Use last token embedding
-
-    def get_value(self, observation: Dict[str, List[str]], lstm_hidden: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
-        x = self.text_encode(observation["game_state_text"])
-        x = x.view(-1, 1, x.size(-1))  # Add batch dimension for LSTM
+    def get_value(self, observation: Dict[str, Any], lstm_hidden: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+        encoded = self.encode_observation(observation)
+        x = encoded["state_embed"].unsqueeze(1)  # Add sequence dimension
         x, _ = self.torso(x, lstm_hidden)
         return self.critic(x)
 
-    def get_action_and_value(self, observation: Dict[str, List[str]], lstm_hidden: Tuple[torch.Tensor, torch.Tensor], action=None, card=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        # Provide action and card fields in case of re-computation
-        x = self.text_encode(observation["game_state_text"])
+    def get_action_and_value(self, observation: Dict[str, Any], lstm_hidden: Tuple[torch.Tensor, torch.Tensor], action=None, card=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        encoded = self.encode_observation(observation)
         
-        x = x.view(-1, 1, x.size(-1))  # Add sequence dimension for LSTM
+        x = encoded["state_embed"].unsqueeze(1)  # Add sequence dimension
         x, new_lstm_hidden = self.torso(x, lstm_hidden)
 
-        action_logits = self.actor(x).squeeze(1)  # Remove sequence dimension only, keep batch dimension
-            
-        action_masks = observation["action_mask"] 
+        action_logits = self.actor(x).squeeze(1)
+        
+        action_masks = observation["action_mask"]
         if isinstance(action_masks, torch.Tensor):
             mask_tensor = action_masks.to(action_logits.device)
         elif isinstance(action_masks, np.ndarray):
@@ -242,109 +261,63 @@ class Agent(nn.Module):
         action_logprob = action_dist.log_prob(action)
         actions_entropy = action_dist.entropy()
 
-        value = self.critic(x).squeeze(1)  # Remove sequence dimension only, keep batch dimension
+        value = self.critic(x).squeeze(1)
         
         # ---- POINTER NETWORK ----
-        # First, encode all cards with batching for efficiency
-        card_sources = ["hand_cards", "jokers", "consumables", "shop_items", "boosters", "vouchers"]
+        # Use context-aware card embeddings from feature encoder
+        card_embeddings = encoded["card_embeddings"]  # [batch_size, max_cards, card_dim]
         batch_size = x.size(0)
-        pointer_embed = self.pointer(x)  # [batch_size, embed_dim]
+        max_cards = card_embeddings.size(1)
         
-        # Collect all card texts across all games and sources for batched encoding
-        all_card_texts = []
-        game_card_mappings = []  # Track which cards belong to which game
+        # Create query vector from LSTM output
+        pointer_query = self.pointer(x)  # [batch_size, card_dim]
         
-        for game_idx in range(batch_size):
-            # Get observation for this specific game
-            # For vectorized environments, observation values are lists/tuples
-            game_obs = {}
-            for key, val in observation.items():
-                if isinstance(val, (list, tuple)) and len(val) > game_idx:
-                    game_obs[key] = val[game_idx]
-                else:
-                    # Single game case or shared value
-                    game_obs[key] = val
+        # Compute attention over all cards
+        if max_cards > 0:
+            # Flatten card embeddings for batch processing
+            pointer_logits = torch.matmul(pointer_query, card_embeddings.transpose(1, 2))  # [batch_size, max_cards]
             
-            game_card_start = len(all_card_texts)
-            game_card_count = 0
+            # Create mask for valid cards (non-padding)
+            valid_mask = (encoded["card_types"] != 6)  # 6 is padding type
+            pointer_logits = pointer_logits.masked_fill(~valid_mask, -1e8)
             
-            # Collect card texts for this game
-            for source in card_sources:
-                if source in game_obs and len(game_obs[source]) > 0:
-                    all_card_texts.extend(game_obs[source])
-                    game_card_count += len(game_obs[source])
+            pointer_dist = Categorical(logits=pointer_logits)
             
-            game_card_mappings.append((game_card_start, game_card_count))
-        
-        # Batch encode all card texts at once
-        if all_card_texts:
-            all_card_embeds = self.text_encode(all_card_texts)  # [total_cards, embed_dim]
+            if card is None:
+                card = pointer_dist.sample()
+            card_logprob = pointer_dist.log_prob(card)
+            cards_entropy = pointer_dist.entropy()
         else:
-            all_card_embeds = None
-        
-        # Now process pointer network for each game separately
-        card_list = []
-        card_logprob_list = []
-        cards_entropy_list = []
-        
-        for game_idx in range(batch_size):
-            game_card_start, game_card_count = game_card_mappings[game_idx]
-            
-            if game_card_count > 0:
-                # Extract this game's card embeddings
-                game_card_embeds = all_card_embeds[game_card_start:game_card_start + game_card_count]
-                
-                # Compute pointer logits for this game
-                game_pointer_embed = pointer_embed[game_idx:game_idx+1]  # [1, embed_dim]
-                game_pointer_logits = torch.matmul(game_pointer_embed, game_card_embeds.T)  # [1, num_cards_this_game]
-                game_pointer_dist = Categorical(logits=game_pointer_logits)
-                
-                if card is None:
-                    game_card = game_pointer_dist.sample()
-                else:
-                    game_card = card[game_idx:game_idx+1]
-                
-                game_card_logprob = game_pointer_dist.log_prob(game_card)
-                game_cards_entropy = game_pointer_dist.entropy()
-            else:
-                # No cards available for this game
-                game_card = torch.zeros(1).to(x.device)
-                game_card_logprob = torch.zeros(1).to(x.device)
-                game_cards_entropy = torch.zeros(1).to(x.device)
-            
-            card_list.append(game_card)
-            card_logprob_list.append(game_card_logprob)
-            cards_entropy_list.append(game_cards_entropy)
-        
-        # Stack results back into batch format
-        card = torch.cat(card_list, dim=0)
-        card_logprob = torch.cat(card_logprob_list, dim=0)
-        cards_entropy = torch.cat(cards_entropy_list, dim=0)
+            # No cards available
+            card = torch.zeros(batch_size, dtype=torch.long, device=x.device)
+            card_logprob = torch.zeros(batch_size, device=x.device)
+            cards_entropy = torch.zeros(batch_size, device=x.device)
 
-        action = action.squeeze()  # Remove extra dimension
-        card = card.squeeze()  # Remove extra dimension
-        value = value.squeeze()  # Remove extra dimension
-
-        action_logprob = action_logprob.squeeze()  # Remove extra dimension
-        card_logprob = card_logprob.squeeze()  # Remove extra dimension
-
-        actions_entropy = actions_entropy.squeeze()  # Remove extra dimension
-        cards_entropy = cards_entropy.squeeze()  # Remove extra dimension
+        action = action.squeeze()
+        card = card.squeeze()
+        value = value.squeeze()
+        action_logprob = action_logprob.squeeze()
+        card_logprob = card_logprob.squeeze()
+        actions_entropy = actions_entropy.squeeze()
+        cards_entropy = cards_entropy.squeeze()
 
         return value, action, action_logprob, actions_entropy, card, card_logprob, cards_entropy, new_lstm_hidden
 
-    def get_original_idx(self, card_index: int, observation: Dict[str, List[str]]) -> Tuple[str, int]:
-        order = ["hand_cards", "jokers", "consumables", "shop_items", "boosters", "vouchers"]
-        # We flattened all the card sources into a single vector, so we need to find the original index
-        current_idx = card_index
-        for source in order:
-            if source in observation:
-                source_len = len(observation[source])
-                if current_idx < source_len:
-                    return source, current_idx + 1  # 1-based index for the card (as game expects)
-                current_idx -= source_len
-        # Fallback if index is out of bounds
-        return "hand_cards", 1
+    def get_original_idx(self, card_index: int, observation: Dict[str, Any]) -> Tuple[str, int]:
+        """Map flat card index back to original source and index."""
+        # Count total cards across all sources to find the original
+        sources = ["hand", "joker", "consumable", "shop", "booster", "voucher"]
+        source_names = ["hand_cards", "jokers", "consumables", "shop_items", "boosters", "vouchers"]
+        
+        current_idx = 0
+        for source_idx, (source, source_name) in enumerate(zip(sources, source_names)):
+            mask = observation["type_masks"][source]
+            count = int(np.sum(mask))
+            if card_index < current_idx + count:
+                return source_name, card_index - current_idx + 1  # 1-based index
+            current_idx += count
+        
+        return "hand_cards", 1  # Fallback
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
@@ -386,10 +359,8 @@ if __name__ == "__main__":
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
-    # ALGO Logic: Storage setup - Modified for dict observations and pointer network
-    # Note: We'll store observations as lists since they're dicts with text
+    # ALGO Logic: Storage setup - Modified for structured observations
     obs = [None] * args.num_steps  # Will store list of dict observations
-    # For Dict action space, we only need to store the discrete action_type
     actions = torch.zeros((args.num_steps, args.num_envs)).to(device)
     cards = torch.zeros((args.num_steps, args.num_envs)).to(device)  # Card selections from pointer network
     action_logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
@@ -410,8 +381,6 @@ if __name__ == "__main__":
     global_step = 0
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
-    # Note: next_obs should be a dict with text observations for your Balatro env
-    # For now, we'll assume it's properly formatted
     next_done = torch.zeros(args.num_envs).to(device)
 
     for iteration in tqdm(range(1, args.num_iterations + 1), desc="Training", unit="iter"):
@@ -447,7 +416,6 @@ if __name__ == "__main__":
 
             # TRY NOT TO MODIFY: execute the game and log data.
             # Convert actions to environment format for vectorized environments
-            # For vectorized Dict action spaces, we need to structure as {"key": [val0, val1, ...]}
             action_types = []
             card_indices = []
             
@@ -456,8 +424,6 @@ if __name__ == "__main__":
                 card_idx = int(card[i].cpu().numpy())
                 
                 # Convert flat card index to (source, index_in_source) format
-                # For vectorized environments, next_obs is a dict where each value is a list
-                # Extract the observation for environment i
                 obs_for_env = {}
                 for key, val in next_obs.items():
                     if isinstance(val, (list, tuple)) and len(val) > i:
@@ -469,17 +435,16 @@ if __name__ == "__main__":
                 
                 # Map string to CardSources enum value
                 source_mapping = {
-                    "hand_cards": 0,    # CardSources.HAND
-                    "jokers": 1,        # CardSources.JOKER  
-                    "consumables": 2,   # CardSources.CONSUMABLE
-                    "shop_items": 3,    # CardSources.SHOP
-                    "boosters": 4,      # CardSources.BOOSTERPACK
-                    "vouchers": 6,      # CardSources.VOUCHER
+                    "hand": 0,
+                    "joker": 1,
+                    "consumable": 2,
+                    "shop": 3,
+                    "booster": 4,
+                    "voucher": 6,
                 }
                 card_source_value = source_mapping.get(card_source_str, 0)
                 
-                action_types.append(action_type + 1)  # Convert to 1-indexed for environment
-                # card_index_in_source is already 1-based from get_original_idx
+                action_types.append(action_type + 1)
                 card_indices.append(np.array([card_source_value, card_index_in_source], dtype=np.int32))
             
             # Structure actions for vectorized environment
