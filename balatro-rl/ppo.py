@@ -208,7 +208,7 @@ def make_env(env_id, idx, capture_video, run_name):
 
 
 class Agent(nn.Module):
-    def __init__(self, envs, card_dim=64, hidden_size=512, lstm_layers=2):
+    def __init__(self, envs, card_dim=70, hidden_size=512, lstm_layers=2):
         super().__init__()
         
         # Feature encoder for structured observations

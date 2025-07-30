@@ -71,27 +71,24 @@ class BalatroFeatureEncoder(nn.Module):
     """
     
     def __init__(self, 
-                 card_dim: int = 84,  # Divisible by 6 for 7 embeddings (7*12=84)
+                 card_dim: int = 70,  # 7 * 10 = 70, divisible by 7
                  hidden_dim: int = 128,
                  num_transformer_layers: int = 3,
-                 num_attention_heads: int = 12):  # 84 is divisible by 12
+                 num_attention_heads: int = 10):  # 70 is divisible by 10
         super().__init__()
         
         self.card_dim = card_dim
         self.hidden_dim = hidden_dim
         
-        # Card feature embeddings
-        self.rank_embed = nn.Embedding(14, card_dim // 6)  # 0=unknown, 1-13=Ace-King
-        self.suit_embed = nn.Embedding(5, card_dim // 6)   # 0=unknown, 1-4=SHDC
-        self.enhancement_embed = nn.Embedding(9, card_dim // 6)  # 0=none, 1-8=enhancements
-        self.seal_embed = nn.Embedding(5, card_dim // 6)  # 0=none, 1-4=seals (gold, red, blue, purple)
-        self.edition_embed = nn.Embedding(5, card_dim // 6)  # 0=base, 1-4=editions
-        
-        # Joker embeddings
-        self.joker_embed = nn.Embedding(VOCAB_SIZES['jokers'], card_dim // 6)
-        
-        # Source type embeddings (distinguish hand/joker/shop/etc)
-        self.source_type_embed = nn.Embedding(6, card_dim // 6)  # 0-5=source types
+        # Card feature embeddings - 7 embeddings of equal size
+        embed_size = card_dim // 7  # e.g. 70//7 = 10
+        self.rank_embed = nn.Embedding(14, embed_size)  
+        self.suit_embed = nn.Embedding(5, embed_size)   
+        self.enhancement_embed = nn.Embedding(9, embed_size)  
+        self.seal_embed = nn.Embedding(5, embed_size)  
+        self.edition_embed = nn.Embedding(5, embed_size)  
+        self.joker_embed = nn.Embedding(VOCAB_SIZES['jokers'], embed_size)
+        self.source_type_embed = nn.Embedding(6, embed_size)
         
         # Note: Game state scalars are handled directly in game_encoder
         
