@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, List, Tuple, Optional
 import numpy as np
+from vocabularies import JOKER_VOCAB, TAROT_VOCAB, PLANET_VOCAB, SPECTRAL_VOCAB, VOCAB_SIZES
 
 class BalatroFeatureEncoder(nn.Module):
     """
@@ -26,18 +27,19 @@ class BalatroFeatureEncoder(nn.Module):
         self.hidden_dim = hidden_dim
         
         # Card feature embeddings
-        self.rank_embed = nn.Embedding(14, card_dim // 4)  # 0=unknown, 1-13=Ace-King
-        self.suit_embed = nn.Embedding(5, card_dim // 4)   # 0=unknown, 1-4=SHDC
-        self.enhancement_embed = nn.Embedding(21, card_dim // 4)  # 0=none, 1-20=enhancements
-        self.seal_embed = nn.Embedding(7, card_dim // 4)  # 0=none, 1-6=seal types
+        self.rank_embed = nn.Embedding(14, card_dim // 5)  # 0=unknown, 1-13=Ace-King
+        self.suit_embed = nn.Embedding(5, card_dim // 5)   # 0=unknown, 1-4=SHDC
+        self.enhancement_embed = nn.Embedding(21, card_dim // 5)  # 0=none, 1-20=enhancements
+        self.seal_embed = nn.Embedding(7, card_dim // 5)  # 0=none, 1-6=seal types
+        
+        # Joker embeddings
+        self.joker_embed = nn.Embedding(VOCAB_SIZES['jokers'], card_dim // 5)
         
         # Card type embeddings (distinguish hand/joker/shop/etc)
-        self.card_type_embed = nn.Embedding(7, card_dim // 4)  # 0-6=card sources
+        self.card_type_embed = nn.Embedding(7, card_dim // 5)  # 0-6=card sources
         
-        # Game state embeddings
-        self.round_embed = nn.Embedding(20, card_dim // 4)  # Round 1-20
-        self.ante_embed = nn.Embedding(20, card_dim // 4)    # Ante 1-20
-        self.money_embed = nn.Embedding(100, card_dim // 4)  # Money 0-99
+        # Scalars: round, ante, money
+        self.scalar_layers = nn.Linear(3, card_dim // 4)
         
         # Single transformer for all cards
         encoder_layer = nn.TransformerEncoderLayer(
@@ -72,7 +74,7 @@ class BalatroFeatureEncoder(nn.Module):
         
         Args:
             observation: Dict containing:
-                - 'cards': Tensor of shape [batch_size, max_cards, 4] with card features
+                - 'cards': Tensor of shape [batch_size, max_cards, 5] with card features [rank, suit, enhancement, seal, joker_id]
                 - 'card_types': Tensor of shape [batch_size, max_cards] with card types
                 - 'type_masks': Dict of masks for each card type
                 - 'game_state': Tensor of shape [batch_size, 3] with game features
@@ -128,7 +130,7 @@ class BalatroFeatureEncoder(nn.Module):
     
     def _encode_cards(self, cards: torch.Tensor, card_types: torch.Tensor) -> torch.Tensor:
         """Encode individual card features into dense representations."""
-        # cards: [batch_size, max_cards, 4] - [rank, suit, enhancement, seal]
+        # cards: [batch_size, max_cards, 5] - [rank, suit, enhancement, seal, joker_id]
         # card_types: [batch_size, max_cards] - card type indices
         
         batch_size, max_cards, _ = cards.shape
@@ -146,9 +148,13 @@ class BalatroFeatureEncoder(nn.Module):
         seal_embed = self.seal_embed(seals)
         type_embed = self.card_type_embed(card_types)
         
+        # Extract joker IDs (only valid for joker cards)
+        joker_ids = cards[..., 4].long() if cards.size(-1) > 4 else torch.zeros_like(ranks)
+        joker_embed = self.joker_embed(joker_ids)
+        
         # Concatenate all embeddings
         card_features = torch.cat([
-            rank_embed, suit_embed, enhancement_embed, seal_embed, type_embed
+            rank_embed, suit_embed, enhancement_embed, seal_embed, joker_embed, type_embed
         ], dim=-1)  # [batch_size, max_cards, card_dim]
         
         return card_features
@@ -243,10 +249,20 @@ class CardFeatureExtractor:
         }
         
         # Extract game state features
-        game = game_state.get('game', {})
-        round_num = game.get('round', 1)
-        ante = game.get('ante', 1)
-        money = game_state.get('dollars', 0)
+        if 'game' not in game_state:
+            raise KeyError("'game' key missing from game_state")
+        game = game_state['game']
+        
+        if 'round' not in game:
+            raise KeyError("'round' key missing from game state")
+        if 'ante' not in game:
+            raise KeyError("'ante' key missing from game state")
+        if 'dollars' not in game:
+            raise KeyError("'dollars' key missing from game state")
+            
+        round_num = game['round']
+        ante = game['ante']
+        money = game['dollars']
         
         features['game_state'] = [round_num, ante, money]
         
@@ -281,17 +297,30 @@ class CardFeatureExtractor:
             features['type_masks']['voucher'].append(0)
             card_idx += 1
         
-        # Extract shop items
+        # Extract shop items (mixed types in shop.jokers)
         shop = game_state.get('shop', {})
-        shop_cards = shop.get('jokers', [])
-        for card in shop_cards:
-            card_features = CardFeatureExtractor._extract_shop_features(card)
+        shop_items = shop.get('jokers', [])
+        for item in shop_items:
+            # Shop items can be jokers, consumables, or playing cards
+            if 'name' in item and not ('value' in item and 'suit' in item):
+                # This is likely a joker or consumable
+                if item['name'] in JOKER_VOCAB:
+                    card_features = CardFeatureExtractor._extract_joker_features(item)
+                    card_type = 1  # JOKER
+                else:
+                    card_features = CardFeatureExtractor._extract_consumable_features(item)
+                    card_type = 2  # CONSUMABLE
+            else:
+                # This is a playing card
+                card_features = CardFeatureExtractor._extract_card_features(item)
+                card_type = 0  # HAND (playing card)
+            
             features['cards'].append(card_features)
-            features['card_types'].append(3)  # SHOP
-            features['type_masks']['hand'].append(0)
-            features['type_masks']['joker'].append(0)
+            features['card_types'].append(card_type)
+            features['type_masks']['hand'].append(1 if card_type == 0 else 0)
+            features['type_masks']['joker'].append(1 if card_type == 1 else 0)
             features['type_masks']['shop'].append(1)
-            features['type_masks']['consumable'].append(0)
+            features['type_masks']['consumable'].append(1 if card_type == 2 else 0)
             features['type_masks']['booster'].append(0)
             features['type_masks']['voucher'].append(0)
             card_idx += 1
@@ -341,7 +370,7 @@ class CardFeatureExtractor:
         # Pad to consistent length
         max_cards = 50  # Conservative upper bound
         while len(features['cards']) < max_cards:
-            features['cards'].append([0, 0, 0, 0])  # Padding
+            features['cards'].append([0, 0, 0, 0, 0])  # Padding with 5 elements
             features['card_types'].append(6)  # PADDING type
             for mask_type in features['type_masks']:
                 features['type_masks'][mask_type].append(0)
@@ -357,11 +386,19 @@ class CardFeatureExtractor:
             '8': 8, '9': 9, '10': 10, 'Jack': 11, 'Queen': 12, 'King': 13
         }
         
-        rank = value_map.get(card.get('value', ''), 0)
+        if 'value' not in card:
+            raise KeyError(f"'value' key missing from card: {card}")
+        if card['value'] not in value_map:
+            raise ValueError(f"Unknown card value: {card['value']}")
+        rank = value_map[card['value']]
         
         # Map suits
         suit_map = {'Spades': 1, 'Hearts': 2, 'Diamonds': 3, 'Clubs': 4}
-        suit = suit_map.get(card.get('suit', ''), 0)
+        if 'suit' not in card:
+            raise KeyError(f"'suit' key missing from card: {card}")
+        if card['suit'] not in suit_map:
+            raise ValueError(f"Unknown card suit: {card['suit']}")
+        suit = suit_map[card['suit']]
         
         # Map enhancements
         enhancement_map = {
@@ -370,19 +407,35 @@ class CardFeatureExtractor:
             'Lucky Card': 8, 'Foil': 9, 'Holographic': 10, 'Polychrome': 11,
             'Negative': 12, 'Eternal': 13, 'Perishable': 14, 'Rental': 15
         }
-        enhancement = enhancement_map.get(card.get('ability_name', 'Default Base'), 0)
+        # Default to 'Default Base' if ability_name is missing
+        ability_name = card.get('ability_name', 'Default Base')
+        if ability_name not in enhancement_map:
+            raise ValueError(f"Unknown card enhancement: {ability_name}")
+        enhancement = enhancement_map[ability_name]
         
         # Map seals
         seal_map = {'none': 0, 'Red': 1, 'Blue': 2, 'Gold': 3, 'Purple': 4, 'Green': 5}
-        seal = seal_map.get(card.get('seal', 'none'), 0)
+        # Default to 'none' if seal is missing
+        seal_name = card.get('seal', 'none')
+        if seal_name not in seal_map:
+            raise ValueError(f"Unknown card seal: {seal_name}")
+        seal = seal_map[seal_name]
         
-        return [rank, suit, enhancement, seal]
+        return [rank, suit, enhancement, seal, 0]  # No joker ID for regular cards
     
     @staticmethod
     def _extract_joker_features(joker: Dict) -> List[int]:
         """Extract features from a joker card."""
-        # Jokers don't have traditional card features
-        return [0, 0, 0, 0]  # Placeholder
+        if 'name' not in joker:
+            raise KeyError(f"'name' key missing from joker: {joker}")
+        
+        joker_name = joker['name']
+        if joker_name not in JOKER_VOCAB:
+            raise ValueError(f"Unknown joker: {joker_name}")
+        
+        joker_id = JOKER_VOCAB[joker_name]
+        # For jokers: [0, 0, 0, 0, joker_id]
+        return [0, 0, 0, 0, joker_id]
     
     @staticmethod
     def _extract_shop_features(card: Dict) -> List[int]:
@@ -392,18 +445,56 @@ class CardFeatureExtractor:
     
     @staticmethod
     def _extract_consumable_features(consumable: Dict) -> List[int]:
-        """Extract features from consumable cards."""
-        # Consumables don't have traditional card features
-        return [0, 0, 0, 0]  # Placeholder
+        """Extract features from consumable cards (tarots, planets, spectrals)."""
+        if 'name' not in consumable:
+            raise KeyError(f"'name' key missing from consumable: {consumable}")
+        
+        consumable_name = consumable['name']
+        consumable_id = 0
+        
+        # Try each consumable vocabulary
+        if consumable_name in TAROT_VOCAB:
+            consumable_id = TAROT_VOCAB[consumable_name]
+        elif consumable_name in PLANET_VOCAB:
+            consumable_id = PLANET_VOCAB[consumable_name]
+        elif consumable_name in SPECTRAL_VOCAB:
+            consumable_id = SPECTRAL_VOCAB[consumable_name]
+        else:
+            raise ValueError(f"Unknown consumable: {consumable_name}")
+        
+        # For consumables: [0, 0, 0, 0, consumable_id]
+        return [0, 0, 0, 0, consumable_id]
     
     @staticmethod
     def _extract_booster_features(booster: Dict) -> List[int]:
         """Extract features from booster packs."""
-        # Boosters don't have traditional card features
-        return [0, 0, 0, 0]  # Placeholder
+        if 'name' not in booster:
+            raise KeyError(f"'name' key missing from booster: {booster}")
+        
+        booster_name = booster['name']
+        # Simple booster type mapping - extend as needed
+        booster_types = {
+            'Arcana Pack': 1, 'Celestial Pack': 2, 'Spectral Pack': 3,
+            'Standard Pack': 4, 'Jumbo Standard Pack': 5, 'Mega Standard Pack': 6
+        }
+        
+        if booster_name not in booster_types:
+            raise ValueError(f"Unknown booster type: {booster_name}")
+        
+        booster_id = booster_types[booster_name]
+        # For boosters: [0, 0, booster_id, 0, 0]
+        return [0, 0, booster_id, 0, 0]
     
     @staticmethod
     def _extract_voucher_features(voucher: Dict) -> List[int]:
         """Extract features from vouchers."""
-        # Vouchers don't have traditional card features
-        return [0, 0, 0, 0]  # Placeholder
+        if 'name' not in voucher:
+            raise KeyError(f"'name' key missing from voucher: {voucher}")
+        
+        voucher_name = voucher['name']
+        # Simple voucher mapping - this should be expanded with full voucher list
+        # For now, use a simple numeric ID based on alphabetical order
+        voucher_id = len(voucher_name) % 10 + 1  # Temporary until proper vocab
+        
+        # For vouchers: [0, 0, voucher_id, 0, 0]
+        return [0, 0, voucher_id, 0, 0]

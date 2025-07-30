@@ -11,11 +11,11 @@ def create_test_observation():
     """Create a test observation with sample data."""
     return {
         "cards": np.array([
-            [1, 2, 3, 4],  # Card 1: suit, rank, edition, seal
-            [2, 5, 1, 0],  # Card 2: suit, rank, edition, seal
-            [3, 1, 0, 2],  # Card 3: suit, rank, edition, seal
-            [0, 0, 0, 0],  # Padding
-            [0, 0, 0, 0],  # Padding
+            [2, 1, 3, 4, 0],  # Card 1: rank, suit, enhancement, seal, joker_id
+            [5, 2, 1, 0, 0],  # Card 2: rank, suit, enhancement, seal, joker_id
+            [0, 0, 0, 0, 1],  # Card 3: joker card with joker_id=1
+            [0, 0, 0, 0, 0],  # Padding
+            [0, 0, 0, 0, 0],  # Padding
         ], dtype=np.int32),
         "card_types": np.array([0, 1, 2, 6, 6], dtype=np.int32),  # 6 is padding
         "type_masks": {
@@ -68,7 +68,8 @@ def test_feature_encoder():
     print("✓ Feature encoder created successfully")
     print(f"  - State embedding shape: {output['state_embed'].shape}")
     print(f"  - Card embeddings shape: {output['card_embeddings'].shape}")
-    print(f"  - Component embeddings: {len(output['component_embeddings'])}")
+    print(f"  - Card types shape: {output['card_types'].shape}")
+    print(f"  - Type masks keys: {list(output['type_masks'].keys())}")
     
     # Test with batch
     batch_size = 3
@@ -100,19 +101,21 @@ def test_card_feature_extractor():
     """Test the card feature extractor."""
     print("\nTesting CardFeatureExtractor...")
     
-    # Create mock game state
+    # Create mock game state matching actual structure from controllers.py
     game_state = {
         "hand": [
-            {"suit": 1, "rank": 5, "edition": 0, "seal": 0},
-            {"suit": 2, "rank": 3, "edition": 1, "seal": 0},
+            {"value": "5", "suit": "Hearts", "ability_name": "Default Base", "seal": "none"},
+            {"value": "3", "suit": "Spades", "ability_name": "Bonus Card", "seal": "none"},
         ],
         "jokers": [
-            {"id": 1, "edition": 0, "seal": 0},
+            {"name": "Joker"},
         ],
+        "consumables": [],
+        "shop": {"jokers": [], "boosters": [], "vouchers": []},
         "game": {
             "ante": 3,
             "round": 2,
-            "money": 50
+            "dollars": 50
         }
     }
     
