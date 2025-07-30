@@ -27,6 +27,12 @@ def _unstack_nested_dict(nested_dict: Dict[str, Any], env_idx: int) -> Dict[str,
         elif isinstance(val, (list, tuple)) and len(val) > env_idx:
             # Unstack lists/tuples at environment index
             result[key] = val[env_idx]
+        elif isinstance(val, np.ndarray) and val.ndim > 0 and len(val) > env_idx:
+            # Handle numpy arrays
+            result[key] = val[env_idx]
+        elif isinstance(val, torch.Tensor) and val.dim() > 0 and len(val) > env_idx:
+            # Handle torch tensors
+            result[key] = val[env_idx]
         else:
             # Keep scalars or invalid indices as-is
             result[key] = val
@@ -79,6 +85,12 @@ def unstack_dict_observations(obs_dict: Dict[str, Any], num_envs: int) -> List[D
                 env_obs[key] = _unstack_nested_dict(val, env_idx)
             elif isinstance(val, (list, tuple)) and len(val) > env_idx:
                 # Unstack at environment index
+                env_obs[key] = val[env_idx]
+            elif isinstance(val, np.ndarray) and val.ndim > 0 and len(val) > env_idx:
+                # Handle numpy arrays
+                env_obs[key] = val[env_idx]
+            elif isinstance(val, torch.Tensor) and val.dim() > 0 and len(val) > env_idx:
+                # Handle torch tensors
                 env_obs[key] = val[env_idx]
             else:
                 # Keep scalars or invalid indices as-is
