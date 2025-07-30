@@ -204,31 +204,33 @@ class Agent(nn.Module):
         )
 
     def encode_observation(self, observation: Dict[str, Any]) -> Dict[str, torch.Tensor]:
-        """Encode structured observation using feature encoder."""
-        # Convert numpy arrays to tensors
+        """Encode raw game state observation using feature encoder."""
+        from feature_encoder import CardFeatureExtractor
+        
+        # Extract structured features from raw game state
+        raw_game_state = observation["raw_game_state"]
+        features = CardFeatureExtractor.extract_features(raw_game_state)
+        
+        # Convert to tensors
         device = next(self.parameters()).device
         
-        cards = torch.from_numpy(observation["cards"]).to(device)
-        card_types = torch.from_numpy(observation["card_types"]).to(device)
-        game_state = torch.from_numpy(observation["game_state"]).to(device)
-        
-        type_masks = {}
-        for key, mask in observation["type_masks"].items():
-            type_masks[key] = torch.from_numpy(np.array(mask)).to(device)
+        cards = torch.tensor(features["cards"], dtype=torch.int32).to(device)
+        card_types = torch.tensor(features["card_types"], dtype=torch.int32).to(device)
+        source_types = torch.tensor(features["source_types"], dtype=torch.int32).to(device)
+        game_state = torch.tensor(features["game_state"], dtype=torch.int32).to(device)
         
         # Create batch dimension if needed
         if cards.dim() == 2:
             cards = cards.unsqueeze(0)
             card_types = card_types.unsqueeze(0)
+            source_types = source_types.unsqueeze(0)
             game_state = game_state.unsqueeze(0)
-            for key in type_masks:
-                type_masks[key] = type_masks[key].unsqueeze(0)
         
         # Encode using feature encoder
         encoded = self.feature_encoder({
             "cards": cards,
             "card_types": card_types,
-            "type_masks": type_masks,
+            "source_types": source_types,
             "game_state": game_state
         })
         

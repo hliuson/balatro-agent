@@ -48,15 +48,9 @@ class BalatroGymEnv(gym.Env):
         self.controller = TrainingBalatroController(verbose=False)
         self.controller.run_until_policy()
         
-        # Define observation space
+        # Define observation space for raw game state
         self.observation_space = spaces.Dict({
-            "game_state_text": spaces.Text(max_length=2048),
-            "hand_cards": spaces.Sequence(spaces.Text(max_length=256)),
-            "jokers": spaces.Sequence(spaces.Text(max_length=256)),
-            "consumables": spaces.Sequence(spaces.Text(max_length=256)),
-            "shop_items": spaces.Sequence(spaces.Text(max_length=256)),
-            "boosters": spaces.Sequence(spaces.Text(max_length=256)),
-            "vouchers": spaces.Sequence(spaces.Text(max_length=256)),
+            "raw_game_state": spaces.Dict({}),  # Raw dict from controller - flexible structure
             "action_mask": spaces.Box(low=0, high=1, shape=(len(Actions),), dtype=np.int8),
         })
         
@@ -161,63 +155,21 @@ class BalatroGymEnv(gym.Env):
         return obs, reward, done, False, info
 
     def _get_observation(self) -> Dict[str, Any]:
-        """Get current observation from game state with individual card strings for pointer network"""
+        """Get raw game state from controller"""
         game_state = self.controller.G
         if not game_state:
-            # Return empty observation if no game state
-            return {
-                "game_state_text": "",
-                "hand_cards": [],
+            # Return minimal empty game state
+            game_state = {
+                "hand": [],
                 "jokers": [],
                 "consumables": [],
-                "shop_items": [],
-                "boosters": [],
-                "vouchers": [],
-                "action_mask": np.ones(len(Actions), dtype=np.int8)  # Allow all actions if no state
+                "shop": {"jokers": [], "boosters": [], "vouchers": []},
+                "game": {"round": 1, "ante": 1, "dollars": 0}
             }
         
-        # Get overall game state text
-        game_state_text = format_game_state(game_state)
-        
-        # Get individual card strings for pointer network
-        hand_cards = []
-        if game_state.get("hand"):
-            for card in game_state["hand"]:
-                hand_cards.append(format_card(card))
-        
-        # Use the refactored formatting functions that return arrays
-        jokers = format_jokers(game_state.get("jokers", []))
-        consumables = format_consumables(game_state.get("consumables", []))
-        
-        # Shop items, boosters, vouchers
-        shop_items = []
-        boosters = []
-        vouchers = []
-        
-        if game_state.get("shop"):
-            shop = game_state["shop"]
-            
-            # Shop cards (contains mixed types) - use refactored function
-            shop_items = format_shop_cards(shop.get("jokers", []))
-            
-            # Boosters - use refactored function
-            boosters = format_boosters(shop.get("boosters", []))
-            
-            # Vouchers - use refactored function
-            vouchers = format_vouchers(shop.get("vouchers", []))
-        
-        # Generate action mask based on valid actions
-        action_mask = self._get_action_mask(game_state)
-        
         return {
-            "game_state_text": game_state_text,
-            "hand_cards": hand_cards,
-            "jokers": jokers,
-            "consumables": consumables,
-            "shop_items": shop_items,
-            "boosters": boosters,
-            "vouchers": vouchers,
-            "action_mask": action_mask
+            "raw_game_state": game_state,
+            "action_mask": self._get_action_mask(game_state)
         }
     
     def _get_action_mask(self, game_state: Dict[str, Any]) -> np.ndarray:

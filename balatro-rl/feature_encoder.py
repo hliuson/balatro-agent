@@ -54,6 +54,23 @@ class BalatroFeatureEncoder(nn.Module):
     - Type embeddings distinguish between different card sources
     - Cross-component attention allows synergy detection
     - Outputs both pooled state representation and individual card embeddings for pointer network
+    
+    Input Format:
+        observation: Dict containing:
+            - 'cards': Tensor [batch_size, num_cards, 6] 
+                       Features: [rank, suit, enhancement, seal, edition, joker_id]
+            - 'card_types': Tensor [batch_size, num_cards] 
+                           Card type IDs (0=hand, 1=joker, 2=consumable, etc.)
+            - 'source_types': Tensor [batch_size, num_cards]
+                             Source IDs (0=hand, 1=joker, 2=consumable, 3=shop, 4=booster, 5=voucher)
+            - 'game_state': Tensor [batch_size, 3] with [round, ante, dollars]
+    
+    Output Format:
+        Dict containing:
+            - 'state_embed': Tensor [batch_size, hidden_dim * 7] (6 sources + game state)
+            - 'card_embeddings': Tensor [batch_size, num_cards, card_dim] for pointer network
+            - 'card_types': Pass-through of input card_types
+            - 'source_types': Pass-through of input source_types
     """
     
     def __init__(self, 
@@ -91,15 +108,15 @@ class BalatroFeatureEncoder(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_transformer_layers)
         
-        # Component-specific pooling
-        self.component_pooling = nn.ModuleDict({
-            'hand': nn.Linear(card_dim, hidden_dim),
-            'joker': nn.Linear(card_dim, hidden_dim),
-            'shop': nn.Linear(card_dim, hidden_dim),
-            'consumable': nn.Linear(card_dim, hidden_dim),
-            'booster': nn.Linear(card_dim, hidden_dim),
-            'voucher': nn.Linear(card_dim, hidden_dim),
-        })
+        # Source-specific pooling
+        self.source_pooling = nn.ModuleList([
+            nn.Linear(card_dim, hidden_dim),  # 0: hand
+            nn.Linear(card_dim, hidden_dim),  # 1: joker
+            nn.Linear(card_dim, hidden_dim),  # 2: consumable
+            nn.Linear(card_dim, hidden_dim),  # 3: shop
+            nn.Linear(card_dim, hidden_dim),  # 4: booster
+            nn.Linear(card_dim, hidden_dim),  # 5: voucher
+        ])
         
         # Game state encoder
         self.game_encoder = nn.Sequential(
@@ -141,12 +158,14 @@ class BalatroFeatureEncoder(nn.Module):
         else:
             attended_cards = torch.empty(batch_size, 0, self.card_dim, device=card_features.device)
         
-        # Pool by component type for state representation
+        # Pool by source type for state representation
         pooled_features = []
+        source_types = observation['source_types']  # [batch_size, max_cards]
         
-        for component_type in ['hand', 'joker', 'shop', 'consumable', 'booster', 'voucher']:
-            mask = observation['type_masks'][component_type]  # [batch_size, max_cards]
-            pooled = self.pool_by_mask(attended_cards, mask, component_type)
+        for source_id in range(6):  # 0=hand, 1=joker, 2=consumable, 3=shop, 4=booster, 5=voucher
+            # Create mask for this source type
+            mask = (source_types == source_id)  # [batch_size, max_cards]
+            pooled = self.pool_by_source(attended_cards, mask, source_id)
             pooled_features.append(pooled)
         
         # Encode game state features
@@ -154,13 +173,13 @@ class BalatroFeatureEncoder(nn.Module):
         pooled_features.append(game_features)
         
         # Concatenate all features
-        state_embed = torch.cat(pooled_features, dim=-1)  # [batch_size, hidden_dim * 6 + hidden_dim]
+        state_embed = torch.cat(pooled_features, dim=-1)  # [batch_size, hidden_dim * 7]
         
         return {
             'state_embed': state_embed,
             'card_embeddings': attended_cards,
             'card_types': observation['card_types'],
-            'type_masks': observation['type_masks']
+            'source_types': observation['source_types']
         }
     
     def _encode_cards(self, cards: torch.Tensor, card_types: torch.Tensor) -> torch.Tensor:
@@ -209,17 +228,17 @@ class BalatroFeatureEncoder(nn.Module):
         
         return game_features
     
-    def pool_by_mask(self, 
-                    card_embeddings: torch.Tensor, 
-                    mask: torch.Tensor, 
-                    component_type: str) -> torch.Tensor:
+    def pool_by_source(self, 
+                      card_embeddings: torch.Tensor, 
+                      mask: torch.Tensor, 
+                      source_id: int) -> torch.Tensor:
         """
-        Pool card embeddings by component type using attention-based pooling.
+        Pool card embeddings by source type using attention-based pooling.
         
         Args:
             card_embeddings: [batch_size, max_cards, card_dim]
             mask: [batch_size, max_cards] - boolean mask for valid cards
-            component_type: string identifier for component type
+            source_id: integer identifier for source type (0=hand, 1=joker, etc.)
             
         Returns:
             Pooled representation: [batch_size, hidden_dim]
@@ -246,7 +265,7 @@ class BalatroFeatureEncoder(nn.Module):
         )  # [batch_size, card_dim]
         
         # Project to hidden dimension
-        pooled = self.component_pooling[component_type](pooled)  # [batch_size, hidden_dim]
+        pooled = self.source_pooling[source_id](pooled)  # [batch_size, hidden_dim]
         
         return pooled
 
@@ -314,11 +333,28 @@ def extract_item_features(item: Dict) -> Tuple[List[int], int]:
         raise ValueError(f"Cannot identify item type: {item}")
 
 class CardFeatureExtractor:
-    """Simplified utility class to extract structured features from Balatro game state."""
+    """
+    Simplified utility class to extract structured features from Balatro game state.
+    
+    Input: Raw game state dict from controller with keys like 'hand', 'jokers', 'shop', etc.
+    Output: Dict ready for BalatroFeatureEncoder with keys:
+        - 'cards': List of [rank, suit, enhancement, seal, edition, joker_id] features
+        - 'card_types': List of card type IDs 
+        - 'source_types': List of source IDs (0=hand, 1=joker, 2=consumable, 3=shop)
+        - 'game_state': List of [round, ante, dollars]
+    """
     
     @staticmethod
     def extract_features(game_state: Dict) -> Dict[str, any]:
-        """Extract structured features from game state for the feature encoder."""
+        """
+        Extract structured features from game state for the feature encoder.
+        
+        Args:
+            game_state: Raw game state dict from controller
+        
+        Returns:
+            Dict with structured features ready for tensor conversion and BalatroFeatureEncoder
+        """
         # Validate game state
         if 'game' not in game_state:
             raise KeyError("'game' key missing from game_state")
@@ -330,28 +366,19 @@ class CardFeatureExtractor:
         features = {
             'cards': [],
             'card_types': [],
-            'type_masks': {k: [] for k in ['hand', 'joker', 'shop', 'consumable', 'booster', 'voucher']},
+            'source_types': [],  # Single integer: 0=hand, 1=joker, 2=consumable, 3=shop, 4=booster, 5=voucher
             'game_state': [game['round'], game['ante'], game['dollars']]
         }
         
-        # Helper to add item with type masks
+        # Helper to add item with source type
         def add_item(item, source_type):
             item_features, card_type = extract_item_features(item)
             features['cards'].append(item_features)
             features['card_types'].append(card_type)
             
-            # Set all masks to 0 initially
-            mask_values = {k: 0 for k in features['type_masks']}
-            
-            # Set masks based on card type and source
-            type_name = [k for k, v in CARD_TYPES.items() if v == card_type][0].lower()
-            mask_values[type_name] = 1
-            if source_type == 'shop':
-                mask_values['shop'] = 1
-            
-            # Append mask values
-            for mask_type, value in mask_values.items():
-                features['type_masks'][mask_type].append(value)
+            # Map source type to integer
+            source_map = {'hand': 0, 'joker': 1, 'consumable': 2, 'shop': 3, 'booster': 4, 'voucher': 5}
+            features['source_types'].append(source_map[source_type])
         
         # Extract from all sources
         for source, items in [
@@ -362,9 +389,19 @@ class CardFeatureExtractor:
             for item in items:
                 add_item(item, source)
         
-        # Shop items (mixed types)
+        # Shop items - separate by type
         shop = game_state.get('shop', {})
-        for item in shop.get('jokers', []) + shop.get('boosters', []) + shop.get('vouchers', []):
+        
+        # Shop cards (jokers and consumables sold in shop)
+        for item in shop.get('jokers', []):
             add_item(item, 'shop')
+        
+        # Boosters
+        for item in shop.get('boosters', []):
+            add_item(item, 'booster')
+        
+        # Vouchers  
+        for item in shop.get('vouchers', []):
+            add_item(item, 'voucher')
         
         return features

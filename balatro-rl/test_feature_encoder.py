@@ -43,13 +43,13 @@ def test_feature_encoder():
     obs = create_test_observation()
     
     # Convert to tensors
-    cards = torch.from_numpy(obs["cards"]).unsqueeze(0)  # Add batch dimension
-    card_types = torch.from_numpy(obs["card_types"]).unsqueeze(0)
-    game_state = torch.from_numpy(obs["game_state"]).unsqueeze(0)
+    cards = torch.tensor(obs["cards"]).unsqueeze(0)  # Add batch dimension
+    card_types = torch.tensor(obs["card_types"]).unsqueeze(0)
+    game_state = torch.tensor(obs["game_state"]).unsqueeze(0)
     
     type_masks = {}
     for key, mask in obs["type_masks"].items():
-        type_masks[key] = torch.from_numpy(mask).unsqueeze(0)
+        type_masks[key] = torch.tensor(mask).unsqueeze(0)
     
     # Create input dict
     input_dict = {
