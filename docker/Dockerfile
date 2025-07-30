@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     tmux \
     imagemagick \
     jq \
+    x11-apps \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
