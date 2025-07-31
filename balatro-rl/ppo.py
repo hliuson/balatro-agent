@@ -10,12 +10,17 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import tyro
+import threading
+import concurrent
+
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
 from typing import Any, Dict, List, Tuple, Union
 
 from tqdm import tqdm
+
+_dump_boot_lock = threading.Lock()
 
 def _unstack_nested_dict(nested_dict: Dict[str, Any], env_idx: int) -> Dict[str, Any]:
     """Recursively unstack a nested dictionary at the given environment index."""
@@ -158,9 +163,9 @@ class Args:
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 16
+    num_envs: int = 8
     """the number of parallel game environments"""
-    num_steps: int = 512
+    num_steps: int = 1024
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -200,7 +205,10 @@ def make_env(env_id, idx, capture_video, run_name):
     def thunk():
         if env_id == "Balatro-v0":
             from balatro_env import BalatroGymEnv
-            env = BalatroGymEnv()
+            env = BalatroGymEnv(auto_start=False)
+            with _dump_boot_lock:
+                env.controller.start_balatro_instance()
+            env.controller.run_until_policy()  # Ensure the controller is ready
         else:
             env = gym.make(env_id)
         env = gym.wrappers.RecordEpisodeStatistics(env)
@@ -437,9 +445,19 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
+    print("Booting Balatro instances...")
+    def create_single_env(env_idx):
+       env_factory = make_env(args.env_id, env_idx, args.capture_video, run_name)
+       return env_factory()
+
     # env setup
-    envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)],
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.num_envs) as executor:
+        futures = [executor.submit(create_single_env, i) for i in range(args.num_envs)]
+    envs = [future.result() for future in concurrent.futures.as_completed(futures)]
+
+
+    envs = gym.vector.SyncVectorEnv( #need to make a do-nothing function that just gets the env list
+        [lambda: envs[i] for i in range(args.num_envs)]
     )
 
     agent = Agent(envs).to(device)

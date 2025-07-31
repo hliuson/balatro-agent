@@ -644,6 +644,7 @@ class BalatroControllerBase:
         
         if auto_start:
             self.start_balatro_instance()
+            self.run_until_policy()
 
     def pass_action(self, state):
         """
@@ -1413,9 +1414,9 @@ class BasicBalatroController(BalatroControllerBase):
         return [Actions.CASH_OUT]
 
 class TrainingBalatroController(BalatroControllerBase):
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, auto_start=True):
         # The policy is invoked for SELECTING_HAND, SHOP, and GAME_OVER states
-        super().__init__(verbose=verbose, policy_states=[State.SELECTING_HAND, State.SHOP, State.GAME_OVER], auto_start=True)
+        super().__init__(verbose=verbose, policy_states=[State.SELECTING_HAND, State.SHOP, State.GAME_OVER], auto_start=auto_start)
 
         # Define handlers for states that should be automated.
         self.state_handlers[State.MENU] = self.handle_menu

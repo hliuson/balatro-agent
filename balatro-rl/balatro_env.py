@@ -41,12 +41,11 @@ ACTION_TO_SOURCE = {
 class BalatroGymEnv(gym.Env):
     """Minimal Balatro Gymnasium Environment using text observations"""
     
-    def __init__(self):
+    def __init__(self, auto_start=True):
         super().__init__()
         
         # Initialize the Balatro controller
-        self.controller = TrainingBalatroController(verbose=False)
-        self.controller.run_until_policy()
+        self.controller = TrainingBalatroController(verbose=False, auto_start=auto_start)
         
         # Define observation space for tokenized features
         self.observation_space = spaces.Dict({

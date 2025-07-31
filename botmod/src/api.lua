@@ -444,8 +444,8 @@ function BalatrobotAPI.init()
     end
 
     -- Disable FPS cap
-    if BALATRO_BOT_CONFIG.uncap_fps then
-        G.FPS_CAP = 10000
+    if BALATRO_BOT_CONFIG.fps then
+        G.FPS_CAP = BALATRO_BOT_CONFIG.fps
     end
 
     -- Makes things move instantly instead of sliding
