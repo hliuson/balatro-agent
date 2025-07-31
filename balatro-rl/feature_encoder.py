@@ -88,7 +88,7 @@ class BalatroFeatureEncoder(nn.Module):
         self.seal_embed = nn.Embedding(5, embed_size)  
         self.edition_embed = nn.Embedding(5, embed_size)  
         self.joker_embed = nn.Embedding(VOCAB_SIZES['jokers'], embed_size)
-        self.source_type_embed = nn.Embedding(6, embed_size)
+        self.source_type_embed = nn.Embedding(7, embed_size)
         
         # Note: Game state scalars are handled directly in game_encoder
         

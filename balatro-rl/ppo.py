@@ -59,7 +59,11 @@ def _stack_nested_values(values: List[Any]) -> Any:
     
     # Handle numpy arrays
     elif all(isinstance(v, np.ndarray) for v in values):
-        return np.stack(values, axis=0)
+        #attempt to stack, if they are not compatible, return as list
+        try:
+            return np.stack(values, axis=0)
+        except ValueError:
+            return values
     
     # For everything else (primitives, mixed types, etc.), just wrap in list
     else:
@@ -154,9 +158,9 @@ class Args:
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 4
+    num_envs: int = 16
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 512
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -217,7 +221,7 @@ class Agent(nn.Module):
             card_dim=card_dim,
             hidden_dim=hidden_size,
             num_transformer_layers=3,
-            num_attention_heads=8
+            num_attention_heads=7
         )
         
         # Calculate input size: 6 component types * hidden_size + game_state_hidden
@@ -259,13 +263,39 @@ class Agent(nn.Module):
             nn.Linear(hidden_size, 1),
         )
 
+    def pad_source_types(self, source_types: List[np.ndarray]) -> np.ndarray:
+        """Pad source types to max_cards with 6 (invalid source type)."""
+        padded_sources = []
+        max_cards = max(len(source) for source in source_types)
+        for source in source_types:
+            if len(source) < max_cards:
+                padded_source = np.pad(source, (0, max_cards - len(source)), mode='constant', constant_values=6)
+            else:
+                padded_source = source
+            padded_sources.append(padded_source)
+        return np.array(padded_sources)
     def encode_observation(self, observation: Dict[str, Any]) -> Dict[str, torch.Tensor]:
         """Encode tokenized observation using feature encoder."""
         device = next(self.parameters()).device
         
         # Convert numpy arrays to tensors
-        cards = torch.tensor(observation["cards"], dtype=torch.int32).to(device)
-        source_types = torch.tensor(observation["source_types"], dtype=torch.int32).to(device)
+        max_cards = max(cards.shape[0] for cards in observation["cards"])
+        #cards: Tuple of np.array with shape n_cards x card_dim
+        # source_types: np.array with shape n_cards : pad with -1 to max_cards
+        cards = []
+        for arr in observation["cards"]:
+            ncards = arr.shape[0]
+            if ncards < max_cards:
+                # Pad with zeros if fewer cards than max_cards
+                padded_arr = np.pad(arr, ((0, max_cards-ncards), (0, 0)), mode='constant', constant_values=0)
+            else:
+                padded_arr = arr
+            cards.append(padded_arr)
+        cards = np.array(cards, dtype=np.float32)  # Convert to float32 for compatibility
+        sources = self.pad_source_types(observation["source_types"])
+
+        cards = torch.tensor(cards, dtype=torch.int32).to(device)
+        source_types = torch.tensor(sources, dtype=torch.int32).to(device)
         game_state = torch.tensor(observation["game_state"], dtype=torch.int32).to(device)
         
         # Create batch dimension if needed
@@ -323,19 +353,19 @@ class Agent(nn.Module):
         
         # Create query vector from LSTM output
         pointer_query = self.pointer(x)  # [batch_size, card_dim]
-        
+        pointer_query = pointer_query.squeeze(1)  # Remove sequence dimension
         # Compute attention over all cards
         if max_cards > 0:
-            # Flatten card embeddings for batch processing
-            pointer_logits = torch.matmul(pointer_query, card_embeddings.transpose(1, 2))  # [batch_size, max_cards]
-            
-            # Create mask for valid cards (we don't have padding now, so all cards are valid)
-            # If we ever need padding later, we can check source_types or card features
-            valid_mask = torch.ones(batch_size, max_cards, dtype=torch.bool, device=x.device)
+            pointer_logits = torch.einsum("bcd,bd->bc", card_embeddings, pointer_query) 
+
+            #mask out invalid cards: those which have source type 6
+            source_types = self.pad_source_types(observation["source_types"])  # [batch_size, max_cards]
+            source_types = torch.tensor(source_types, dtype=torch.int32, device=card_embeddings.device)
+            valid_mask = source_types != 6
             pointer_logits = pointer_logits.masked_fill(~valid_mask, -1e8)
-            
+
             pointer_dist = Categorical(logits=pointer_logits)
-            
+
             if card is None:
                 card = pointer_dist.sample()
             card_logprob = pointer_dist.log_prob(card)
@@ -414,6 +444,8 @@ if __name__ == "__main__":
 
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+
+    print(f"Training model with total parameters: {sum(p.numel() for p in agent.parameters() if p.requires_grad)}")
 
     # ALGO Logic: Storage setup - Modified for structured observations
     obs = [None] * args.num_steps  # Will store list of dict observations
