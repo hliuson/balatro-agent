@@ -12,6 +12,7 @@ import torch.optim as optim
 import tyro
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+from hl_gauss_pytorch import HLGaussLoss, HLGaussLayer
 
 from typing import Any, Dict, List, Tuple, Union
 
@@ -256,11 +257,12 @@ class Agent(nn.Module):
             nn.Linear(hidden_size, card_dim),  # Match card embedding dimension
         )
 
+        # Critic MLP that outputs logits for HL-Gauss distribution
         self.critic = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.LayerNorm(hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, 1),
+            nn.Linear(hidden_size, 64),  # Output logits for num_bins
         )
 
     def pad_source_types(self, source_types: List[np.ndarray]) -> np.ndarray:
@@ -313,11 +315,22 @@ class Agent(nn.Module):
         
         return encoded
 
-    def get_value(self, observation: Dict[str, Any], lstm_hidden: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+    def get_value(self, observation: Dict[str, Any], lstm_hidden: Tuple[torch.Tensor, torch.Tensor], hl_gauss_loss=None) -> torch.Tensor:
         encoded = self.encode_observation(observation)
         x = encoded["state_embed"].unsqueeze(1)  # Add sequence dimension
         x, _ = self.torso(x, lstm_hidden)
-        return self.critic(x)
+        x = x.squeeze(1)  # Remove sequence dimension
+        logits = self.critic(x)  # Get logits from critic
+        if hl_gauss_loss is not None:
+            return hl_gauss_loss(logits)  # Convert logits to scalar value predictions
+        else:
+            # For inference without loss function, convert logits to values manually
+            # This is a simple expectation computation
+            device = logits.device
+            min_val, max_val, num_bins = 0., 10., 64
+            bin_centers = torch.linspace(min_val, max_val, num_bins, device=device)
+            probs = torch.softmax(logits, dim=-1)
+            return torch.sum(probs * bin_centers, dim=-1)
 
     def get_action_and_value(self, observation: Dict[str, Any], lstm_hidden: Tuple[torch.Tensor, torch.Tensor], action=None, card=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         encoded = self.encode_observation(observation)
@@ -343,7 +356,14 @@ class Agent(nn.Module):
         action_logprob = action_dist.log_prob(action)
         actions_entropy = action_dist.entropy()
 
-        value = self.critic(x).squeeze(1)
+        # Value computation: get logits from critic, convert to scalar values
+        logits = self.critic(x.squeeze(1))
+        # Convert logits to values using expectation
+        device = logits.device
+        min_val, max_val, num_bins = 0., 10., 64
+        bin_centers = torch.linspace(min_val, max_val, num_bins, device=device)
+        probs = torch.softmax(logits, dim=-1)
+        value = torch.sum(probs * bin_centers, dim=-1)
         
         # ---- POINTER NETWORK ----
         # Use context-aware card embeddings from feature encoder
@@ -444,6 +464,15 @@ if __name__ == "__main__":
 
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+    
+    # HL-Gauss loss function for distributional value estimation
+    hl_gauss_loss = HLGaussLoss(
+        min_value=0.,
+        max_value=10.,  # Adjust based on your reward range (Balatro scores can vary widely)
+        num_bins=64,    # Higher resolution for better value estimation
+        sigma=0.3,      # Controls smoothness of the distribution
+        clamp_to_range=True
+    )
 
     print(f"Training model with total parameters: {sum(p.numel() for p in agent.parameters() if p.requires_grad)}")
 
@@ -551,7 +580,7 @@ if __name__ == "__main__":
         print("Reached max rollout steps, calculating rewards and advantages")
         # bootstrap value if not done
         with torch.no_grad():
-            next_value = agent.get_value(next_obs, lstm_hidden).reshape(1, -1)
+            next_value = agent.get_value(next_obs, lstm_hidden, hl_gauss_loss).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
@@ -608,6 +637,13 @@ if __name__ == "__main__":
                     mb_obs, mb_lstm_hidden, b_actions.long()[mb_inds], b_cards.long()[mb_inds]
                 )
                 
+                # For HL-Gauss loss, we need to get the critic logits and compute loss directly
+                encoded = agent.encode_observation(mb_obs)
+                x = encoded["state_embed"].unsqueeze(1)  # Add sequence dimension
+                x, _ = agent.torso(x, mb_lstm_hidden)
+                x = x.squeeze(1)  # Remove sequence dimension
+                critic_logits = agent.critic(x)
+                
                 # Compute ratios for both action and card policies (factorized joint policy)
                 action_logratio = new_action_logprob - b_action_logprobs[mb_inds]
                 card_logratio = new_card_logprob - b_card_logprobs[mb_inds]
@@ -633,20 +669,8 @@ if __name__ == "__main__":
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Value loss
-                newvalue = newvalue.view(-1)
-                if args.clip_vloss:
-                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(
-                        newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
-                    )
-                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
-                else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                # Value loss using HL-Gauss loss
+                v_loss = hl_gauss_loss(critic_logits, b_returns[mb_inds])  # HL-Gauss loss computes distributional loss
 
                 entropy_loss = entropy.mean()
                 loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
