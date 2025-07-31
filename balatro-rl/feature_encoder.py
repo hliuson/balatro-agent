@@ -24,7 +24,8 @@ CONSUMABLE_VOCAB = {**TAROT_VOCAB, **PLANET_VOCAB, **SPECTRAL_VOCAB}
 
 BOOSTER_VOCAB = {
     'Arcana Pack': 1, 'Celestial Pack': 2, 'Spectral Pack': 3,
-    'Standard Pack': 4, 'Jumbo Standard Pack': 5, 'Mega Standard Pack': 6
+    'Standard Pack': 4, 'Jumbo Standard Pack': 5, 'Mega Standard Pack': 6,
+    'Buffoon Pack': 7, 'Jumbo Buffoon Pack': 8, 'Mega Buffoon Pack': 9
 }
 
 VOUCHER_VOCAB = {

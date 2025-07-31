@@ -239,6 +239,11 @@ class BalatroGymEnv(gym.Env):
         # Get current chips scored and chips required
         current_chips = self._get_current_chips()
         required_chips = self._get_required_chips()
+        
+        # Handle case where required_chips is 0 (e.g., during shop phase)
+        if required_chips == 0:
+            return 0.0
+            
         chip_progress = current_chips - self.prev_chips
         prev_chip_percent = self.prev_chips / required_chips
 
